@@ -1,0 +1,26 @@
+{
+  "name": "afwaah-tracker-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AfwaahTracker REST API (Node.js + Express + node-oracledb)",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch-path=. server.js",
+    "ingest": "node scripts/runIngestion.js",
+    "db:install": "node scripts/installDb.js",
+    "db:check": "node scripts/checkDb.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.3",
+    "node-cron": "^4.6.0",
+    "oracledb": "^7.0.1",
+    "rss-parser": "^3.13.0"
+  }
+}

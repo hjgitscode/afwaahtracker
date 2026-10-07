@@ -1,0 +1,62 @@
+const TONES = {
+  blue: 'bg-[#e3eefb] text-deep border-[#c9dcf2]',
+  navy: 'bg-navy text-white border-navy',
+  muted: 'bg-[#eef2f6] text-ink-2 border-line',
+  amber: 'bg-[#fdf3d6] text-[#8a6410] border-[#f3dd9a]',
+  green: 'bg-[#e4f2ec] text-[#2f6e55] border-[#c3e2d5]',
+  red: 'bg-[#f8e6e6] text-[#934343] border-[#ecc9c9]',
+  electric: 'bg-[#e1f5fb] text-[#1f6d87] border-[#bfe8f5]',
+  white: 'bg-white/10 text-white border-white/20',
+};
+
+export default function Badge({ tone = 'blue', icon: Icon, className = '', children, title }) {
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase leading-none tracking-[0.07em] ${TONES[tone] || TONES.blue} ${className}`}
+    >
+      {Icon && <Icon size={12} strokeWidth={2.5} />}
+      {children}
+    </span>
+  );
+}
+
+const STATUS_TONE = {
+  UNVERIFIED: 'muted',
+  DEVELOPING: 'blue',
+  CORROBORATED: 'green',
+  DISPUTED: 'amber',
+  DEBUNKED: 'red',
+  CANDIDATE: 'electric',
+};
+
+export function StatusBadge({ status }) {
+  return <Badge tone={STATUS_TONE[status] || 'muted'}>{status ? status.toLowerCase() : 'unknown'}</Badge>;
+}
+
+export function OriginBadge({ origin }) {
+  if (origin === 'DEMO') return <Badge tone="muted" title="Synthetic demonstration data">Demo</Badge>;
+  if (origin === 'AUTOMATED') return <Badge tone="electric" title="Collected by the automated ingestion pipeline">Automated</Badge>;
+  return <Badge tone="blue">Manual</Badge>;
+}
+
+export function DependencyBadge({ dependency }) {
+  return dependency === 'DERIVED' ? (
+    <Badge tone="amber">Derived</Badge>
+  ) : (
+    <Badge tone="green">Independent</Badge>
+  );
+}
+
+const METHOD_LABEL = {
+  CURATED: ['Curated', 'muted'],
+  RULE_STRONG: ['Strong match', 'green'],
+  RULE_CANDIDATE: ['Candidate match', 'amber'],
+  NEW_CLAIM: ['New claim', 'electric'],
+  MANUAL: ['Manual', 'blue'],
+};
+
+export function MatchBadge({ method }) {
+  const [label, tone] = METHOD_LABEL[method] || [method || '—', 'muted'];
+  return <Badge tone={tone}>{label}</Badge>;
+}

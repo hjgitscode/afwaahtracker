@@ -1,0 +1,23 @@
+{
+  "name": "afwaah-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AfwaahTracker - claim fingerprinting, source provenance and mutation tracking on Oracle Database",
+  "scripts": {
+    "install-all": "npm install && npm install --prefix server && npm install --prefix client",
+    "dev": "concurrently -k -n api,web -c blue,cyan \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "start": "concurrently -k -n api,web -c blue,cyan \"npm start --prefix server\" \"npm run preview --prefix client\"",
+    "build": "npm run build --prefix client",
+    "server": "npm start --prefix server",
+    "client": "npm run dev --prefix client",
+    "db:install": "npm run db:install --prefix server",
+    "db:check": "npm run db:check --prefix server",
+    "ingest": "npm run ingest --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=18.18"
+  }
+}
