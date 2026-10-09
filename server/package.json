@@ -14,13 +14,16 @@
     "ingest": "node scripts/runIngestion.js",
     "db:install": "node scripts/installDb.js",
     "db:migrate": "node scripts/migrateDb.js",
-    "db:check": "node scripts/checkDb.js"
+    "db:check": "node scripts/checkDb.js",
+    "db:prepare": "node scripts/prepareDb.js",
+    "start:production": "node scripts/prepareDb.js && node server.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.3",
+    "express-rate-limit": "^7.5.0",
     "node-cron": "^4.6.0",
     "oracledb": "^7.0.1",
     "rss-parser": "^3.13.0"

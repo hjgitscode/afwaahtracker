@@ -1,6 +1,7 @@
 import { getDashboard } from '../services/dashboardService.js';
 import { listPlatforms, listCategories, listEntities } from '../services/metaService.js';
 import { getLabOverview, runExampleQuery } from '../services/labService.js';
+import config from '../config/index.js';
 import { poolStatus, queryOne } from '../db/pool.js';
 import { isWebSearchConfigured } from '../web-search/searchProvider.js';
 
@@ -19,11 +20,14 @@ export const health = async (req, res) => {
   } catch {
     database = 'down';
   }
+  const pool = poolStatus();
   res.status(database === 'up' ? 200 : 503).json({
     status: database === 'up' ? 'ok' : 'degraded',
     database,
-    pool: poolStatus(),
     webSearch: isWebSearchConfigured() ? 'configured' : 'not configured',
+    uptimeSeconds: Math.round(process.uptime()),
+    // Connection details stay out of public responses
+    pool: config.isProduction ? { connected: pool.connected } : pool,
     time: new Date().toISOString(),
   });
 };

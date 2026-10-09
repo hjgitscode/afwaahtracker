@@ -160,7 +160,7 @@ function RunView({ runId, query }) {
               )}
 
               {failed && !data.storedClaims.length && !stored.data?.sources?.length && (
-                <div className="card"><EmptyState title="Nothing stored for this query yet">Add TAVILY_API_KEY to server/.env to search the live web, or try another query.</EmptyState></div>
+                <div className="card"><EmptyState title="Nothing stored for this query yet">Live web search is not available right now. Try another query, or explore the stored claim families.</EmptyState></div>
               )}
             </>
           )}

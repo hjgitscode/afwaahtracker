@@ -1,4 +1,6 @@
+import config from '../config/index.js';
 import { withConnection } from '../db/pool.js';
+import { adminEnabled } from '../middleware/security.js';
 import { schedulerState } from '../ingestion/scheduler.js';
 import { lastRefreshByType } from './dashboardService.js';
 
@@ -48,6 +50,7 @@ export async function getIngestionStatus() {
         GROUP BY TRUNC(l.started_at), i.source_type
         ORDER BY day, i.source_type`
     );
-    return { scheduler: schedulerState(), summary, lastRefresh, sources, recentRuns, activity };
+    // adminControls tells the Lab whether to show SYNC FEEDS to this visitor
+    return { scheduler: schedulerState(), summary, lastRefresh, sources, recentRuns, activity, adminControls: adminEnabled() && !config.adminToken };
   });
 }

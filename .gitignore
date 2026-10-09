@@ -7,3 +7,4 @@ server/.env
 Thumbs.db
 .vscode/
 afwaah-tracker.zip
+.env.production

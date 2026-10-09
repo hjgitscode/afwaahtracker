@@ -13,6 +13,8 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 | `VALIDATION_ERROR` | 400 | Bad input |
 | `BUSINESS_RULE` | 400 | A PL/SQL `RAISE_APPLICATION_ERROR` (e.g. parent variant from another claim) |
 | `DUPLICATE` | 409 | Unique constraint (e.g. source URL already stored) |
+| `UNAUTHORIZED` / `FORBIDDEN` | 401 / 403 | Write/admin endpoint without a valid `ADMIN_TOKEN` (production without a token: always 403) |
+| `TOO_MANY_REQUESTS` / `DAILY_LIMIT` | 429 | Per-IP rate limit, or the site-wide daily cap on new web searches |
 | `INTERNAL_ERROR` | 500 | Anything else. No stack traces are returned |
 
 ## Read endpoints
@@ -41,6 +43,8 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 | `GET /lab/queries/:key` | Runs one **whitelisted** read-only example query. Arbitrary SQL is never accepted |
 
 ## Write endpoints
+
+All endpoints in this table except `POST /investigate-web` are **admin endpoints**: in production they require `Authorization: Bearer <ADMIN_TOKEN>` and are disabled when no token is configured. `POST /investigate-web` is public but rate-limited (per IP, per day, and in Nginx).
 
 | Method & path | Body |
 |---|---|

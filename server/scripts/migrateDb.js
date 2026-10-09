@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect, runFiles } from './installDb.js';
 
-const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql'];
+export const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql'];
 
 async function main() {
   const conn = await connect();

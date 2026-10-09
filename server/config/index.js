@@ -19,9 +19,31 @@ const bool = (value, fallback) => {
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 };
 
+const env = (process.env.NODE_ENV || 'development').trim().toLowerCase();
+const isProduction = env === 'production';
+
 const config = {
+  env,
+  isProduction,
   port: int(process.env.PORT, 3000),
-  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+  // Number of reverse proxies in front of Express (Nginx = 1). Needed so the
+  // rate limiter sees the visitor's address instead of the proxy's.
+  trustProxy: int(process.env.TRUST_PROXY, isProduction ? 1 : 0),
+  // Write/admin endpoints. With ADMIN_TOKEN set they require
+  // "Authorization: Bearer <ADMIN_TOKEN>". Without it they are open in
+  // development and disabled in production.
+  adminToken: (process.env.ADMIN_TOKEN || '').trim(),
+  rateLimit: {
+    windowMinutes: Math.max(1, int(process.env.RATE_LIMIT_WINDOW_MINUTES, 15)),
+    maxRequests: Math.max(10, int(process.env.RATE_LIMIT_MAX, 300)),
+    // Live web investigations use paid search credits
+    investigateWindowMinutes: Math.max(1, int(process.env.INVESTIGATE_RATE_WINDOW_MINUTES, 60)),
+    investigateMaxPerIp: Math.max(1, int(process.env.INVESTIGATE_RATE_MAX, 10)),
+    investigateDailyLimit: Math.max(0, int(process.env.INVESTIGATE_DAILY_LIMIT, 100)),
+  },
+  // Browser origins allowed to call the API cross-origin. Behind the bundled
+  // Nginx the site is same-origin, so production can leave this empty.
+  corsOrigins: (process.env.CORS_ORIGINS ?? (isProduction ? '' : 'http://localhost:5173,http://127.0.0.1:5173'))
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
@@ -55,7 +77,7 @@ const config = {
     fetchConcurrency: Math.min(6, Math.max(1, int(process.env.WEB_FETCH_CONCURRENCY, 5))),
     respectRobots: bool(process.env.WEB_FETCH_RESPECT_ROBOTS, true),
     // Only for local testing against a mock server. Keep false.
-    allowPrivateHosts: bool(process.env.WEB_FETCH_ALLOW_PRIVATE, false),
+    allowPrivateHosts: !isProduction && bool(process.env.WEB_FETCH_ALLOW_PRIVATE, false),
   },
 };
 

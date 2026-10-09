@@ -1,0 +1,107 @@
+# AfwaahTracker production stack
+#
+#   Internet --443/80--> client (Nginx: React build + /api proxy + HTTPS)
+#                          |  network: web
+#                        server (Express API, Tavily search, feeds)
+#                          |  network: db (internal, no internet, no published ports)
+#                        oracle (Oracle Database 23ai Free, data in a named volume)
+#
+# Only the client publishes ports (80, 443). Oracle 1521 and the API 3000 stay
+# on the internal Docker networks.
+#
+#   docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
+
+name: afwaahtracker
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    restart: unless-stopped
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD:?set ORACLE_PASSWORD in .env.production}
+      APP_USER: ${DB_USER:-afwaah}
+      APP_USER_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env.production}
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    networks:
+      - db
+    # No "ports:" on purpose: 1521 is reachable only from the server container
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    shm_size: 1g
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      oracle:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DB_CONNECT_STRING: oracle:1521/FREEPDB1
+      DB_PREPARE_ON_START: "true"
+      TRUST_PROXY: "1"
+    networks:
+      - db
+      - web
+    # No "ports:": reachable only through Nginx
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.production}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    networks:
+      - web
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # One-off helper for Let's Encrypt certificates (not started by "up"):
+  #   docker compose ... run --rm certbot certonly --webroot -w /var/www/certbot -d <domain> ...
+  certbot:
+    image: certbot/certbot:v2.11.0
+    profiles: ["tools"]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    networks:
+      - web
+
+networks:
+  # Oracle and the API only; no route to the internet
+  db:
+    internal: true
+  # API and Nginx; the API reaches Tavily and the feeds through this network
+  web:
+
+volumes:
+  oracle-data:
+  letsencrypt:
+  certbot-www:

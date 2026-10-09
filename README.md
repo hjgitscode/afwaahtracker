@@ -22,7 +22,9 @@ React displays. Express orchestrates. Oracle stores and analyses. The browser ne
 
 ---
 
-## Running it on Windows (Docker Desktop)
+## Running it locally on Windows (Docker Desktop)
+
+For a public server, see **[Public deployment (Ubuntu VPS)](#public-deployment-ubuntu-vps)**.
 
 You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container created earlier (`afwaah-oracle`).
 
@@ -143,7 +145,129 @@ Feeds (two GDELT queries, Hacker News top stories and seven RSS/Atom feeds, conf
 | `WEB_FETCH_RESPECT_ROBOTS` | `true` | Honour `robots.txt` |
 | `INGESTION_ENABLED` / `INGESTION_INTERVAL_MINUTES` / `INGESTION_RUN_ON_START` | `true` / `60` / `true` | Background feeds |
 | `MATCH_STRONG_THRESHOLD` / `MATCH_CANDIDATE_THRESHOLD` | `75` / `55` | Claim matching thresholds |
-| `PORT` / `CORS_ORIGINS` | `3000` / `http://localhost:5173,…` | API |
+| `PORT` / `CORS_ORIGINS` | `3000` / `http://localhost:5173,…` (empty in production) | API port and allowed cross-origin browser origins |
+| `NODE_ENV` | `development` | `production` enables JSON logs, locks write endpoints and requires `DB_PASSWORD` |
+| `ADMIN_TOKEN` | *(empty)* | Bearer token for write/admin endpoints (development without a token: open; production without a token: disabled) |
+| `RATE_LIMIT_MAX` / `INVESTIGATE_RATE_MAX` / `INVESTIGATE_DAILY_LIMIT` | `300` / `10` / `100` | Requests per 15 min per IP / investigations per hour per IP / new web searches per day |
+
+---
+
+## Public deployment (Ubuntu VPS)
+
+```
+Internet ──80/443──▶ client  (Nginx: HTTPS, React build, /api proxy, rate limits)
+                       │ network "web"
+                     server  (Express API, Tavily search, feeds)
+                       │ network "db"  (internal: no internet, no published ports)
+                     oracle  (Oracle Database 23ai Free, data in volume "oracle-data")
+```
+
+Only Nginx publishes ports (80 and 443). Oracle's 1521 and the API's 3000 are reachable only inside Docker. Secrets live in `.env.production` on the server and never reach the browser or the images.
+
+**What the public can do:** search, investigate (rate-limited), and read claims, sources, lineage and the Database Lab. Its example SQL is a fixed, read-only whitelist; arbitrary SQL is never accepted.
+**What is locked:** creating, editing and deleting claims, variants and sources, and the feed sync (`POST /api/ingestion/refresh`). These return 403 unless you set `ADMIN_TOKEN`; then they accept `Authorization: Bearer <ADMIN_TOKEN>` (for example from `curl`). The SYNC FEEDS button is hidden on the public site; scheduled feeds keep running.
+
+**Limits (per visitor IP, configurable in `.env.production`):** 300 API requests per 15 minutes; 10 web investigations per hour; at most 100 new web searches per day site-wide (`INVESTIGATE_DAILY_LIMIT`). Nginx adds a second limit in front of the API. The same query repeated within two minutes reuses the earlier result instead of spending another search credit.
+
+### Requirements
+
+- Ubuntu 22.04 or 24.04 VPS with **at least 4 GB RAM** (Oracle needs about 2 GB) and 20 GB disk
+- A domain name with an **A record** pointing at the VPS IP address
+
+### 1. Install Docker and open the firewall
+
+```bash
+sudo apt update && sudo apt -y upgrade
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER      # then log out and back in
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+Do not open port 1521 or 3000. The stack does not publish them.
+
+### 2. Get the code and create the production settings
+
+```bash
+git clone https://github.com/hjgitscode/afwaahtracker.git
+cd afwaahtracker
+cp .env.production.example .env.production
+chmod 600 .env.production
+nano .env.production
+```
+
+Set at least:
+
+| Variable | Value |
+|---|---|
+| `DOMAIN` | your domain, e.g. `afwaah.example.com` |
+| `ORACLE_PASSWORD` | a long random password (Oracle administrator) |
+| `DB_PASSWORD` | a different long random password (application user) |
+| `TAVILY_API_KEY` | your Tavily key (empty = stored data and feeds only) |
+
+Leave `CORS_ORIGINS` empty: the site and the API share one origin. Generate passwords with `openssl rand -base64 24`. Avoid the characters `$`, `` ` `` and quotes in passwords.
+
+### 3. Start the stack (HTTP first)
+
+```bash
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.production.yml logs -f server
+```
+
+The first start creates the Oracle database (a few minutes). The API then installs the AfwaahTracker schema and demonstration data automatically (`Database ready.` in the log). Later starts only apply the safe migrations, so data is never reset. Press Ctrl+C to stop following the log; the containers keep running.
+
+Without a certificate Nginx serves plain HTTP, so `http://<your-domain>` works now.
+
+### 4. Enable HTTPS (Let's Encrypt)
+
+```bash
+docker compose --env-file .env.production -f docker-compose.production.yml run --rm certbot \
+  certonly --webroot -w /var/www/certbot -d YOUR_DOMAIN --email YOU@EXAMPLE.COM --agree-tos --no-eff-email
+docker compose --env-file .env.production -f docker-compose.production.yml restart client
+```
+
+Nginx detects the certificate on start, serves HTTPS on 443 and redirects HTTP to HTTPS (with HSTS).
+
+Renew automatically (Let's Encrypt certificates last 90 days). Run `crontab -e` and add (adjust the path):
+
+```
+0 3 * * 1 cd /home/ubuntu/afwaahtracker && docker compose --env-file .env.production -f docker-compose.production.yml run --rm certbot renew --quiet && docker compose --env-file .env.production -f docker-compose.production.yml exec client nginx -s reload
+```
+
+### 5. Check it
+
+```bash
+curl -s https://YOUR_DOMAIN/api/health
+docker compose --env-file .env.production -f docker-compose.production.yml ps
+```
+
+`/api/health` returns `{"status":"ok","database":"up","webSearch":"configured",…}`, or HTTP 503 with `"database":"down"` while Oracle restarts. `ps` must list ports only for `client`.
+
+### Operating it
+
+| Task | Command (from the project folder) |
+|---|---|
+| Shorter commands | `alias afw='docker compose --env-file .env.production -f docker-compose.production.yml'` |
+| Logs (JSON lines, secrets masked) | `afw logs -f server` · `afw logs -f client` |
+| Update to a new version | `git pull && afw up -d --build` |
+| Restart one service | `afw restart server` |
+| Stop / start everything | `afw down` · `afw up -d` (data is kept in the `oracle-data` volume) |
+| Back up Oracle data | `afw stop oracle && docker run --rm -v afwaahtracker_oracle-data:/d -v $PWD:/b alpine tar czf /b/oracle-data-$(date +%F).tgz -C /d . && afw start oracle` |
+| Reset to demonstration data | `afw exec server node scripts/installDb.js` (deletes all stored investigations) |
+
+Never run `afw down -v`: `-v` deletes the Oracle volume.
+
+### Failure behaviour
+
+| Situation | What visitors see |
+|---|---|
+| Tavily key missing, rejected, rate-limited or out of credits | The investigation finishes with "Live web search unavailable — showing stored sources." and the stored results |
+| A public page cannot be fetched (blocked, timeout, not HTML) | The source is stored from its search title and snippet; the run is marked PARTIAL |
+| Too many requests | HTTP 429 with a short explanation; the rest of the site keeps working |
+| Oracle restarting | HTTP 503 "The database is temporarily unavailable"; the API reconnects automatically |
+| API container restarting | Nginx answers `/api` with a 503 JSON message; the site itself stays up |
 
 ---
 

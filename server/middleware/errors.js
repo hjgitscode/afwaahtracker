@@ -2,6 +2,8 @@
  * Error types and the Express error handler. Raw stack traces and SQL are
  * never sent to the client; they are logged on the server instead.
  */
+import { log } from './logger.js';
+
 export class HttpError extends Error {
   constructor(status, code, message, details) {
     super(message);
@@ -28,7 +30,9 @@ export class DatabaseUnavailableError extends HttpError {
     super(
       503,
       'DB_UNAVAILABLE',
-      'The Oracle database is not reachable. Check that Oracle is running and that server/.env is correct.'
+      process.env.NODE_ENV === 'production'
+        ? 'The database is temporarily unavailable. Please try again in a moment.'
+        : 'The Oracle database is not reachable. Check that Oracle is running and that server/.env is correct.'
     );
     this.cause = cause;
   }
@@ -50,6 +54,9 @@ function oracleCode(err) {
 
 export function toHttpError(err) {
   if (err instanceof HttpError) return err;
+  // Malformed or oversized JSON bodies (express.json)
+  if (err?.type === 'entity.parse.failed') return new HttpError(400, 'VALIDATION_ERROR', 'The request body is not valid JSON.');
+  if (err?.type === 'entity.too.large') return new HttpError(413, 'TOO_LARGE', 'The request body is too large.');
   const code = oracleCode(err);
   if (code && CONNECTIVITY_CODES.has(code)) return new DatabaseUnavailableError(err);
   if (code && /^ORA-20\d{3}$/.test(code)) {
@@ -69,7 +76,12 @@ export function toHttpError(err) {
 export function errorHandler(err, req, res, next) {
   const httpErr = toHttpError(err);
   if (httpErr.status >= 500) {
-    console.error(`[api] ${req.method} ${req.originalUrl} -> ${httpErr.code}:`, err.cause?.message || err.message);
+    log.error('request failed', {
+      method: req.method,
+      path: req.originalUrl.split('?')[0],
+      code: httpErr.code,
+      detail: (err.cause?.message || err.message || '').split('\n')[0],
+    });
   }
   res.status(httpErr.status).json({
     error: { code: httpErr.code, message: httpErr.message, details: httpErr.details },

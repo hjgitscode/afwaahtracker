@@ -114,11 +114,11 @@ function Monitoring() {
         label="Background mode · GDELT · Hacker News · RSS/Atom"
         title="Background monitoring"
         icon={Rss}
-        action={(
+        action={status.data?.adminControls ? (
           <button type="button" onClick={refresh} disabled={refreshing} className="btn btn-ghost btn-sm">
             <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> {refreshing ? 'Syncing…' : 'Sync feeds'}
           </button>
-        )}
+        ) : null}
       />
       {status.error ? <ErrorState compact error={status.error} onRetry={status.reload} />
         : !s ? <LoadingBlock rows={4} />
