@@ -13,9 +13,11 @@
     "dev": "node --watch-path=. server.js",
     "ingest": "node scripts/runIngestion.js",
     "db:install": "node scripts/installDb.js",
+    "db:migrate": "node scripts/migrateDb.js",
     "db:check": "node scripts/checkDb.js"
   },
   "dependencies": {
+    "cheerio": "^1.0.0",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.3",

@@ -51,6 +51,7 @@ export function normaliseText(text) {
 export function singular(token) {
   if (token.length <= 3) return token;
   if (token.endsWith('ies') && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (/(ch|sh|x|z|ss)es$/.test(token)) return token.slice(0, -2);
   if (/(ss|us|is|os|as)$/.test(token)) return token;
   if (token.endsWith('s')) return token.slice(0, -1);
   return token;
@@ -111,11 +112,13 @@ export function toDate(value) {
 /**
  * Canonical item shape produced by every adapter.
  */
-export function makeItem({ externalId, title, url, linkedUrl, publisher, author, publishedAt, snippet, engagement }) {
+export function makeItem({ externalId, title, url, linkedUrl, publisher, author, publishedAt, snippet, engagement, unknownDate = 'now' }) {
   const cleanTitle = cleanText(title, 1000);
   const normUrl = normaliseUrl(url);
   if (!cleanTitle || !normUrl) return null;
-  const published = toDate(publishedAt) || new Date();
+  // Feeds stamp an undated item with the fetch time; web pages keep an
+  // unknown publication date as null ("Not determined").
+  const published = toDate(publishedAt) || (unknownDate === 'now' ? new Date() : null);
   return {
     externalId: externalId ? String(externalId).slice(0, 100) : null,
     title: cleanTitle,
@@ -124,7 +127,7 @@ export function makeItem({ externalId, title, url, linkedUrl, publisher, author,
     publisher: cleanText(publisher || domainOf(normUrl) || 'Unknown publisher', 200),
     author: author ? cleanText(author, 200) : null,
     // A publication time in the future is clamped to "now"
-    publishedAt: published > new Date() ? new Date() : published,
+    publishedAt: published && published > new Date() ? new Date() : published,
     snippet: snippet ? cleanText(snippet, 3900) : null,
     engagement: Number.isFinite(Number(engagement)) ? Math.max(0, Math.round(Number(engagement))) : 0,
   };

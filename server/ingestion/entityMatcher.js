@@ -68,12 +68,16 @@ export function detectEntities(text, dictionary) {
   return [...found.values()];
 }
 
-/** Known dictionary keywords present in the text (whole-word, singular-tolerant). */
+// Regular inflections accepted after a keyword stem: launch -> launches, launched, launching
+const INFLECTIONS = ['s', 'es', 'ed', 'd', 'ing'];
+
+/** Known dictionary keywords present in the text (whole-word, inflection-tolerant). */
 export function detectKnownKeywords(text, dictionary) {
   const normText = normaliseText(text);
   const out = [];
   for (const k of dictionary.keywords) {
-    if (containsPhrase(normText, k.norm) || (k.norm.length > 3 && containsPhrase(normText, `${k.norm}s`))) {
+    if (containsPhrase(normText, k.norm)
+        || (k.norm.length > 3 && INFLECTIONS.some((suffix) => containsPhrase(normText, `${k.norm}${suffix}`)))) {
       out.push(k);
     }
   }

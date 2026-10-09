@@ -15,6 +15,7 @@
 --   03         demonstration seed data (one transaction)
 --   09         ingestion support + ingestion source registry
 --   04         views
+--   10         live web investigation (also usable as a migration)
 --------------------------------------------------------------------------------
 SET ECHO OFF
 SET VERIFY OFF
@@ -35,6 +36,7 @@ PROMPT ============================================================
 @@03_seed.sql
 @@09_ingestion_support.sql
 @@04_views.sql
+@@10_web_investigation.sql
 
 PROMPT Recompiling dependent objects ...
 BEGIN

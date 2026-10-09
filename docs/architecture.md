@@ -1,6 +1,6 @@
 # Architecture
 
-AfwaahTracker is a classic three-tier application. The Oracle database sits at its centre.
+AfwaahTracker is a three-tier application with Oracle at its centre. React displays, Express orchestrates, Oracle stores and analyses.
 
 ```
 ┌──────────────────────────┐   HTTP / JSON    ┌─────────────────────────────┐  node-oracledb  ┌──────────────────────────┐
@@ -9,16 +9,17 @@ AfwaahTracker is a classic three-tier application. The Oracle database sits at i
 │ Recharts · React Flow    │ ◀─────────────── │ services (SQL, bind vars)   │ ◀────────────── │ views · PL/SQL · triggers│
 └──────────────────────────┘                  │ ingestion/ (node-cron)      │                 └──────────────────────────┘
                                               └──────────────┬──────────────┘
-                                                             │ HTTPS (public, structured)
-                                                ┌────────────┴─────────────┐
-                                                │ GDELT · Hacker News · RSS │
-                                                └──────────────────────────┘
+                                                             │ HTTPS
+                                  ┌──────────────────────────┴──────────────────────────┐
+                                  │ on demand: Brave Search API → public pages           │
+                                  │ background: GDELT · Hacker News · RSS/Atom           │
+                                  └──────────────────────────────────────────────────────┘
 ```
 
 ## Principles
 
 - **The database does the work.** Echo Ratio, aggregates, lineage (hierarchical `CONNECT BY` queries), deduplication (unique indexes plus `INGEST_SOURCE`) and the Mutation Ledger (`GENERATE_MUTATION_LEDGER`, called by a compound trigger) all run in Oracle. React only renders the results.
-- **No direct database access from the browser.** In development Vite proxies `/api` to Express. Credentials live in `server/.env`.
+- **No direct database access from the browser.** In development Vite proxies `/api` to Express. Oracle credentials and `BRAVE_SEARCH_API_KEY` live only in `server/.env`.
 - **Bind variables everywhere.** Dynamic `WHERE` clauses are assembled only from fixed, server-defined fragments, and all values are bound.
 - **Connection pooling.** `server/db/pool.js` creates one `oracledb` pool. `withTransaction()` commits on success and rolls back on any error.
 - **No runtime AI.** Entity recognition, keyword detection, certainty and action detection and claim matching are dictionary and rule based.
@@ -37,18 +38,21 @@ afwaah-tracker/
 │  ├─ middleware/       error types and friendly error mapping
 │  ├─ routes/           REST route table
 │  ├─ controllers/      HTTP layer
-│  ├─ services/         SQL for claims, sources, dashboard, ingestion, lab
+│  ├─ services/         SQL for claims, sources, overview, web search, ingestion, lab
+│  ├─ web-search/       braveSearch.js · webInvestigator.js · pageFetcher.js ·
+│  │                    pageExtractor.js · referenceExtractor.js
 │  ├─ ingestion/        gdelt.js · hackerNews.js · rss.js · normalizer.js ·
-│  │                    entityMatcher.js · matcher.js · pipeline.js · scheduler.js
-│  └─ scripts/          installDb.js · checkDb.js · runIngestion.js
+│  │                    entityMatcher.js · matcher.js · sourceProcessor.js (shared by
+│  │                    feeds and web search) · pipeline.js · scheduler.js
+│  └─ scripts/          installDb.js · migrateDb.js · checkDb.js · runIngestion.js
 ├─ client/
 │  └─ src/
-│     ├─ components/    ui/ · claim/ · charts/ · layout/ · HeroRadar · ERDiagram
+│     ├─ components/    ui/ · claim/ · investigate/ · charts/ · layout/ · HeroRadar · ERDiagram
 │     ├─ layouts/       AppLayout (navbar, geometric background, footer)
-│     ├─ pages/         Home · Explore · Claim · Sources · LiveFeed · DatabaseLab · 404
+│     ├─ pages/         Home · Explore · Claim · Sources · DatabaseLab · 404
 │     ├─ services/      api.js (REST client)
-│     ├─ hooks/         useApi · useRefresh (shared refresh state)
-│     ├─ utils/         formatting, Echo Ratio display helpers
+│     ├─ hooks/         useApi · useInvestigate · useRefresh (feed sync state)
+│     ├─ utils/         formatting, Echo Ratio and live/demo wording helpers
 │     └─ styles/        design tokens + Tailwind layers
 └─ docs/
 ```
@@ -63,6 +67,7 @@ afwaah-tracker/
 
 ## Front end
 
-- React Router routes: `/`, `/explore`, `/claims/:id`, `/sources`, `/live`, `/lab`, `*`.
-- `RefreshProvider` holds the global *Refresh Data* state. When a refresh completes it increments a version counter, and every `useApi` hook refetches.
+- React Router routes: `/`, `/explore`, `/claims/:id`, `/sources`, `/lab`, `*`. Older addresses redirect (`/dashboard` → `/`, `/live` → `/lab`).
+- **INVESTIGATE WEB** (`useInvestigate`) posts `/api/investigate-web` in async mode and opens `/explore?q=…&run=<id>`, which polls the run status, then loads the results.
+- `RefreshProvider` holds the *SYNC FEEDS* state in the Database Lab. When a sync completes it increments a version counter, and every `useApi` hook refetches.
 - Explore and Sources keep their filters in the URL, and every filter is sent to the API (server-side SQL).

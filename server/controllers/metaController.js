@@ -2,6 +2,7 @@ import { getDashboard } from '../services/dashboardService.js';
 import { listPlatforms, listCategories, listEntities } from '../services/metaService.js';
 import { getLabOverview, runExampleQuery } from '../services/labService.js';
 import { poolStatus, queryOne } from '../db/pool.js';
+import { isWebSearchConfigured } from '../web-search/braveSearch.js';
 
 export const dashboard = async (req, res) => res.json(await getDashboard());
 export const platforms = async (req, res) => res.json(await listPlatforms());
@@ -22,6 +23,7 @@ export const health = async (req, res) => {
     status: database === 'up' ? 'ok' : 'degraded',
     database,
     pool: poolStatus(),
+    webSearch: isWebSearchConfigured() ? 'configured' : 'not configured',
     time: new Date().toISOString(),
   });
 };

@@ -9,7 +9,7 @@ import { STOP_WORDS } from '../ingestion/normalizer.js';
 
 export const CLAIM_STATUSES = ['UNVERIFIED', 'DEVELOPING', 'CORROBORATED', 'DISPUTED', 'DEBUNKED', 'CANDIDATE'];
 export const ECHO_BANDS = ['MOSTLY INDEPENDENT SOURCING', 'MIXED SOURCING', 'HIGH REPETITION', 'VERY HIGH SOURCE DEPENDENCE'];
-const SOURCE_TYPES = ['DEMO', 'AUTOMATED', 'MANUAL', 'GDELT', 'HACKER_NEWS', 'RSS'];
+const SOURCE_TYPES = ['DEMO', 'AUTOMATED', 'WEB_SEARCH', 'MANUAL', 'GDELT', 'HACKER_NEWS', 'RSS'];
 
 const SORTS = {
   newest: 'o.latest_seen DESC NULLS LAST, o.claim_id DESC',
@@ -89,6 +89,9 @@ function buildClaimFilter(params) {
     where.push('o.status = :status');
   }
 
+  if (params.origin === 'LIVE') where.push(`o.claim_origin <> 'DEMO'`);
+  else if (params.origin === 'DEMO') where.push(`o.claim_origin = 'DEMO'`);
+
   if (ECHO_BANDS.includes(params.echoBand)) {
     binds.echo_band = params.echoBand;
     where.push('o.echo_band = :echo_band');
@@ -108,7 +111,7 @@ function buildClaimFilter(params) {
 
   if (SOURCE_TYPES.includes(params.sourceType)) {
     binds.source_type = params.sourceType;
-    if (['DEMO', 'AUTOMATED', 'MANUAL'].includes(params.sourceType)) {
+    if (['DEMO', 'AUTOMATED', 'WEB_SEARCH', 'MANUAL'].includes(params.sourceType)) {
       where.push(`EXISTS (SELECT 1 FROM claim_variants v JOIN sources s ON s.source_id = v.source_id
                            WHERE v.claim_id = o.claim_id AND s.origin_type = :source_type)`);
     } else {
@@ -117,6 +120,14 @@ function buildClaimFilter(params) {
                             JOIN ingestion_sources i ON i.ingestion_source_id = s.ingestion_source_id
                            WHERE v.claim_id = o.claim_id AND i.source_type = :source_type)`);
     }
+  }
+
+  // Claim families touched by one live web search run
+  const runId = toInt(params.run);
+  if (runId) {
+    binds.run_id = runId;
+    where.push(`EXISTS (SELECT 1 FROM search_result_links l JOIN claim_variants v ON v.source_id = l.source_id
+                         WHERE v.claim_id = o.claim_id AND l.search_run_id = :run_id)`);
   }
 
   return {
@@ -143,6 +154,9 @@ export async function listClaims(params = {}) {
               WHERE p.platform_id IN (SELECT s.platform_id FROM claim_variants v
                                         JOIN sources s ON s.source_id = v.source_id
                                        WHERE v.claim_id = o.claim_id)) AS platforms,
+            ${toInt(params.run) ? `(SELECT COUNT(DISTINCT l.source_id) FROM search_result_links l
+                JOIN claim_variants v ON v.source_id = l.source_id
+               WHERE v.claim_id = o.claim_id AND l.search_run_id = :run_id)` : 'NULL'} AS run_sources,
             ${relevanceSql} AS relevance,
             COUNT(*) OVER () AS total_count
        FROM vw_claim_overview o
@@ -166,7 +180,12 @@ export async function getClaim(id) {
   return withConnection(async (db) => {
     const claim = await db.one(
       `SELECT o.*, c.summary,
-              calculate_echo_ratio(o.claim_id) AS echo_ratio_plsql
+              calculate_echo_ratio(o.claim_id) AS echo_ratio_plsql,
+              (SELECT COUNT(*) FROM source_references r
+                WHERE r.from_source_id IN (SELECT source_id FROM claim_variants WHERE claim_id = o.claim_id)
+                  AND r.to_source_id   IN (SELECT source_id FROM claim_variants WHERE claim_id = o.claim_id)) AS known_reference_links,
+              (SELECT COUNT(*) FROM claim_variants v JOIN sources s ON s.source_id = v.source_id
+                WHERE v.claim_id = o.claim_id AND s.published_at IS NULL) AS undated_sources
          FROM vw_claim_overview o
          JOIN claims c ON c.claim_id = o.claim_id
         WHERE o.claim_id = :id`,
@@ -215,10 +234,14 @@ export async function getClaimSources(id) {
   await assertClaim(id);
   return query(
     `SELECT cs.*,
-            CASE WHEN cs.published_at = MIN(cs.published_at) OVER () THEN 'Y' ELSE 'N' END AS is_earliest
+            v.lineage_basis, v.parent_variant_id AS wording_parent_id, v.match_breakdown,
+            CASE WHEN cs.published_at IS NOT NULL AND cs.published_at = MIN(cs.published_at) OVER ()
+                 THEN 'Y' ELSE 'N' END AS is_earliest,
+            (SELECT COUNT(*) FROM source_references r WHERE r.from_source_id = cs.source_id) AS reference_count
        FROM vw_claim_sources cs
+       JOIN claim_variants v ON v.variant_id = cs.variant_id
       WHERE cs.claim_id = :id
-      ORDER BY cs.published_at, cs.variant_id`,
+      ORDER BY cs.published_at NULLS LAST, cs.variant_id`,
     { id }
   );
 }
@@ -235,7 +258,7 @@ export async function getClaimVariants(id) {
        JOIN sources s   ON s.source_id = v.source_id
        JOIN platforms p ON p.platform_id = s.platform_id
       WHERE v.claim_id = :id
-      ORDER BY s.published_at, v.variant_id`,
+      ORDER BY s.published_at NULLS LAST, v.variant_id`,
     { id }
   );
 }
@@ -258,7 +281,7 @@ export async function getClaimMutations(id) {
        JOIN platforms pp      ON pp.platform_id = ps.platform_id
        JOIN platforms cp      ON cp.platform_id = cs.platform_id
       WHERE m.claim_id = :id
-      ORDER BY cs.published_at, m.child_variant_id,
+      ORDER BY cs.published_at NULLS LAST, m.child_variant_id,
                DECODE(m.changed_component, 'ACTOR', 1, 'ACTION', 2, 'TARGET', 3, 'LOCATION', 4,
                       'EVENT', 5, 'DATE', 6, 'QUANTITY', 7, 'CERTAINTY', 8, 9)`,
     { id }
@@ -279,7 +302,7 @@ export async function getClaimLineage(id) {
       WHERE v.claim_id = :id
       START WITH v.parent_variant_id IS NULL
     CONNECT BY NOCYCLE PRIOR v.variant_id = v.parent_variant_id
-      ORDER SIBLINGS BY s.published_at`,
+      ORDER SIBLINGS BY s.published_at NULLS LAST`,
     { id }
   );
   const edges = nodes
@@ -314,7 +337,7 @@ export async function getSourceLineage(id) {
        JOIN ancestry a          ON a.source_id = s.source_id
        JOIN platforms p         ON p.platform_id = s.platform_id
        LEFT JOIN vw_source_lineage l ON l.source_id = s.source_id
-      ORDER BY l.lineage_depth, s.published_at`,
+      ORDER BY l.lineage_depth, s.published_at NULLS LAST`,
     { id }
   );
   const ids = new Set(nodes.map((n) => n.source_id));

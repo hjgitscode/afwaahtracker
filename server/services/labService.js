@@ -8,19 +8,43 @@ import { NotFoundError } from '../middleware/errors.js';
 
 const TABLES = ['PLATFORMS', 'CATEGORIES', 'INGESTION_SOURCES', 'INGESTION_LOG', 'SOURCES', 'CLAIMS',
   'CLAIM_VARIANTS', 'ENTITIES', 'ENTITY_ALIASES', 'CLAIM_ENTITIES', 'ENTITY_CANDIDATES', 'KEYWORDS',
-  'CLAIM_KEYWORDS', 'FINGERPRINTS', 'CLAIM_MUTATIONS', 'AUDIT_LOG'];
+  'CLAIM_KEYWORDS', 'FINGERPRINTS', 'CLAIM_MUTATIONS', 'AUDIT_LOG', 'WEB_SEARCH_RUNS',
+  'SEARCH_RESULT_LINKS', 'SOURCE_REFERENCES'];
 
 export const EXAMPLE_QUERIES = [
   {
     key: 'echo-ratio',
-    title: 'Echo Ratio per claim',
-    concept: 'View + PL/SQL function + ORDER BY',
+    title: 'Known Echo Ratio per claim family',
+    concept: 'View + PL/SQL function',
     sql: `SELECT claim_id, canonical_claim, number_of_sources,
-       number_of_derived_sources, echo_ratio, echo_band
+       number_of_derived_sources, echo_ratio,
+       calculate_echo_ratio(claim_id) AS echo_plsql
   FROM vw_claim_overview
  WHERE number_of_sources > 0
- ORDER BY echo_ratio DESC
+ ORDER BY echo_ratio DESC, number_of_sources DESC
  FETCH FIRST 8 ROWS ONLY`,
+  },
+  {
+    key: 'web-search-runs',
+    title: 'Latest live web searches and what they stored',
+    concept: 'View over WEB_SEARCH_RUNS + SEARCH_RESULT_LINKS',
+    sql: `SELECT search_run_id, query_text, status, results_received,
+       sources_inserted, duplicates_skipped, pages_failed, claim_families
+  FROM vw_web_search_runs
+ ORDER BY started_at DESC
+ FETCH FIRST 8 ROWS ONLY`,
+  },
+  {
+    key: 'source-references',
+    title: 'Explicit references between stored sources',
+    concept: 'Self-join of SOURCES through SOURCE_REFERENCES',
+    sql: `SELECT r.reference_type, f.publisher AS from_source,
+       t.publisher AS to_source, r.confidence_basis
+  FROM source_references r
+  JOIN sources f ON f.source_id = r.from_source_id
+  JOIN sources t ON t.source_id = r.to_source_id
+ ORDER BY r.detected_at DESC
+ FETCH FIRST 10 ROWS ONLY`,
   },
   {
     key: 'mutation-ledger',
@@ -39,7 +63,7 @@ export const EXAMPLE_QUERIES = [
   {
     key: 'source-lineage',
     title: 'Source lineage as a hierarchy',
-    concept: 'Hierarchical query (CONNECT BY) over a self-referencing FK',
+    concept: 'Hierarchical query (CONNECT BY) on a self-referencing FK',
     sql: `SELECT LPAD(' ', (LEVEL - 1) * 2) || publisher AS lineage,
        LEVEL AS depth, SYS_CONNECT_BY_PATH(source_id, '>') AS path
   FROM sources
@@ -47,55 +71,28 @@ export const EXAMPLE_QUERIES = [
 CONNECT BY PRIOR source_id = derived_from_source_id`,
   },
   {
-    key: 'multi-platform',
-    title: 'Claims seen on four or more platforms',
-    concept: 'GROUP BY + HAVING + COUNT(DISTINCT)',
-    sql: `SELECT c.claim_id, c.canonical_claim,
-       COUNT(DISTINCT s.platform_id) AS platforms
-  FROM claims c
-  JOIN claim_variants v ON v.claim_id = c.claim_id
-  JOIN sources s ON s.source_id = v.source_id
- GROUP BY c.claim_id, c.canonical_claim
-HAVING COUNT(DISTINCT s.platform_id) >= 4
- ORDER BY platforms DESC`,
+    key: 'lineage-basis',
+    title: 'How wording parents were chosen',
+    concept: 'GROUP BY + CASE',
+    sql: `SELECT lineage_basis,
+       COUNT(*) AS variants,
+       SUM(CASE WHEN parent_variant_id IS NULL THEN 1 ELSE 0 END) AS without_parent
+  FROM claim_variants
+ GROUP BY lineage_basis
+ ORDER BY variants DESC`,
   },
   {
-    key: 'above-average-echo',
-    title: 'Claims above the average Echo Ratio',
-    concept: 'Nested subquery',
-    sql: `SELECT claim_id, canonical_claim, echo_ratio
-  FROM vw_claim_overview
- WHERE echo_ratio > (SELECT AVG(echo_ratio)
-                       FROM vw_claim_overview
-                      WHERE number_of_sources > 0)
- ORDER BY echo_ratio DESC`,
-  },
-  {
-    key: 'platform-engagement',
-    title: 'Engagement by platform',
-    concept: 'AVG / MIN / MAX aggregates',
-    sql: `SELECT p.platform_name,
+    key: 'retrieval-methods',
+    title: 'Sources by retrieval method and platform',
+    concept: 'GROUP BY + HAVING + JOIN',
+    sql: `SELECT s.origin_type AS retrieval_method, p.platform_name,
        COUNT(*) AS sources,
-       ROUND(AVG(s.engagement_count)) AS avg_engagement,
-       MAX(s.engagement_count) AS max_engagement
-  FROM platforms p
-  JOIN sources s ON s.platform_id = p.platform_id
- GROUP BY p.platform_name
- ORDER BY avg_engagement DESC`,
-  },
-  {
-    key: 'ingestion-stats',
-    title: 'Ingestion statistics by source type',
-    concept: 'LEFT JOIN + GROUP BY + NVL',
-    sql: `SELECT i.source_type,
-       COUNT(DISTINCT i.ingestion_source_id) AS feeds,
-       COUNT(l.log_id) AS runs,
-       NVL(SUM(l.records_inserted), 0) AS inserted,
-       NVL(SUM(l.records_skipped), 0) AS duplicates_skipped
-  FROM ingestion_sources i
-  LEFT JOIN ingestion_log l
-    ON l.ingestion_source_id = i.ingestion_source_id
- GROUP BY i.source_type`,
+       SUM(CASE WHEN s.published_at IS NULL THEN 1 ELSE 0 END) AS undated
+  FROM sources s
+  JOIN platforms p ON p.platform_id = s.platform_id
+ GROUP BY s.origin_type, p.platform_name
+HAVING COUNT(*) > 0
+ ORDER BY sources DESC`,
   },
   {
     key: 'audit-trail',
@@ -144,14 +141,16 @@ export async function getLabOverview() {
       `SELECT object_name, object_type, status
          FROM user_objects
         WHERE object_type IN ('PROCEDURE', 'FUNCTION', 'TRIGGER')
+          AND object_name <> 'AFW_DDL'
         ORDER BY object_type, object_name`
     );
     const views = await db.rows(`SELECT view_name FROM user_views ORDER BY view_name`);
-    const indexes = await db.rows(
-      `SELECT index_name, table_name, index_type, uniqueness
-         FROM user_indexes
-        WHERE index_name NOT LIKE 'SYS\\_%' ESCAPE '\\'
-        ORDER BY table_name, index_name`
+    const webRuns = await db.rows(
+      `SELECT search_run_id, query_text, status, started_at, results_received, sources_inserted,
+              duplicates_skipped, pages_failed, claim_families, error_message
+         FROM vw_web_search_runs
+        ORDER BY started_at DESC
+        FETCH FIRST 6 ROWS ONLY`
     );
     const columns = await db.rows(
       `SELECT table_name, COUNT(*) AS columns
@@ -177,7 +176,7 @@ export async function getLabOverview() {
       relationships,
       programUnits,
       views: views.map((v) => v.view_name),
-      indexes,
+      webRuns,
       tables,
       queries: EXAMPLE_QUERIES.map(({ key, title, concept, sql }) => ({ key, title, concept, sql })),
     };

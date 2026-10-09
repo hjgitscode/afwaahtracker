@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ArrowRight, GitCompareArrows, TriangleAlert } from 'lucide-react';
 import Card, { CardHeader } from '../ui/Card.jsx';
 import { EmptyState } from '../ui/States.jsx';
@@ -19,8 +20,12 @@ function groupTransitions(rows) {
   return [...map.values()];
 }
 
+const INITIAL = 6;
+
 export default function MutationLedger({ mutations }) {
+  const [all, setAll] = useState(false);
   const transitions = groupTransitions(mutations || []);
+  const shown = all ? transitions : transitions.slice(0, INITIAL);
   const escalations = (mutations || []).filter((m) => m.is_escalation === 'Y').length;
   return (
     <Card>
@@ -44,20 +49,20 @@ export default function MutationLedger({ mutations }) {
             )}
           </div>
           <ol className="space-y-4">
-            {transitions.map((t) => (
+            {shown.map((t) => (
               <li key={`${t.parent_variant_id}-${t.child_variant_id}`} className="rounded-xl border border-line bg-white p-4 md:p-5">
                 <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr] md:items-start">
                   <div className="min-w-0">
                     <div className="meta-label">From source</div>
                     <div className="mt-0.5 font-bold text-ink">{t.from_publisher}</div>
-                    <div className="text-[13px] text-muted">{t.from_platform} · {formatDate(t.from_published)}</div>
+                    <div className="text-[13px] text-muted">{t.from_platform} · {t.from_published ? formatDate(t.from_published) : 'date not determined'}</div>
                     <div className="mt-1 text-[14px] text-ink-2">“{truncate(t.from_text, 90)}”</div>
                   </div>
                   <ArrowRight className="hidden self-center text-muted md:block" size={20} />
                   <div className="min-w-0">
                     <div className="meta-label">To source</div>
                     <div className="mt-0.5 font-bold text-ink">{t.to_publisher}</div>
-                    <div className="text-[13px] text-muted">{t.to_platform} · {formatDate(t.to_published)}</div>
+                    <div className="text-[13px] text-muted">{t.to_platform} · {t.to_published ? formatDate(t.to_published) : 'date not determined'}</div>
                     <div className="mt-1 text-[14px] text-ink-2">“{truncate(t.to_text, 90)}”</div>
                   </div>
                 </div>
@@ -95,6 +100,11 @@ export default function MutationLedger({ mutations }) {
               </li>
             ))}
           </ol>
+          {transitions.length > INITIAL && (
+            <button type="button" className="btn btn-ghost btn-sm mt-4" onClick={() => setAll((a) => !a)} aria-expanded={all}>
+              {all ? 'Show fewer' : `Show all ${transitions.length} transitions`}
+            </button>
+          )}
         </>
       )}
     </Card>

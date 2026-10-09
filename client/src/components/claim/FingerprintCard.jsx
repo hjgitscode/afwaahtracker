@@ -7,7 +7,7 @@ function Row({ label, children, missing }) {
     <div className="grid gap-1 border-b border-line py-3 last:border-0 sm:grid-cols-[180px_1fr] sm:gap-4">
       <dt className="meta-label pt-0.5">{label}</dt>
       <dd className="text-[15px] text-ink">
-        {missing ? <span className="text-[12px] font-bold uppercase tracking-[0.08em] text-muted">Not yet curated</span> : children}
+        {missing ? <span className="text-[12px] font-bold uppercase tracking-[0.08em] text-muted">Not determined</span> : children}
       </dd>
     </div>
   );

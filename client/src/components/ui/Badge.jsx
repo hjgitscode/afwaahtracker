@@ -1,3 +1,5 @@
+import { RETRIEVAL_LABEL, dependencyLabel } from '../../utils/labels.js';
+
 const TONES = {
   blue: 'bg-[#e3eefb] text-deep border-[#c9dcf2]',
   navy: 'bg-navy text-white border-navy',
@@ -34,17 +36,17 @@ export function StatusBadge({ status }) {
   return <Badge tone={STATUS_TONE[status] || 'muted'}>{status ? status.toLowerCase() : 'unknown'}</Badge>;
 }
 
+/** LIVE (web search, feeds, manual) vs DEMO (curated demonstration data). */
 export function OriginBadge({ origin }) {
   if (origin === 'DEMO') return <Badge tone="muted" title="Synthetic demonstration data">Demo</Badge>;
-  if (origin === 'AUTOMATED') return <Badge tone="electric" title="Collected by the automated ingestion pipeline">Automated</Badge>;
-  return <Badge tone="blue">Manual</Badge>;
+  return <Badge tone="electric" title={`Live data · ${RETRIEVAL_LABEL[origin] || 'stored'}`}>Live</Badge>;
 }
 
-export function DependencyBadge({ dependency }) {
-  return dependency === 'DERIVED' ? (
-    <Badge tone="amber">Derived</Badge>
+export function DependencyBadge({ derived, demo }) {
+  return derived ? (
+    <Badge tone="amber">{dependencyLabel(true, demo)}</Badge>
   ) : (
-    <Badge tone="green">Independent</Badge>
+    <Badge tone={demo ? 'green' : 'muted'}>{dependencyLabel(false, demo)}</Badge>
   );
 }
 

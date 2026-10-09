@@ -11,6 +11,7 @@
     "server": "npm start --prefix server",
     "client": "npm run dev --prefix client",
     "db:install": "npm run db:install --prefix server",
+    "db:migrate": "npm run db:migrate --prefix server",
     "db:check": "npm run db:check --prefix server",
     "ingest": "npm run ingest --prefix server"
   },

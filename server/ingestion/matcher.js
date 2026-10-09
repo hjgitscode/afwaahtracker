@@ -106,7 +106,7 @@ export function scoreCandidate(analysis, row) {
   const event = hasEvent && row.event_overlap > 0 ? WEIGHTS.event : 0;
 
   let date = 0;
-  if (row.latest_seen) {
+  if (row.latest_seen && analysis.publishedAt) {
     const days = Math.abs(analysis.publishedAt - new Date(row.latest_seen)) / 86400000;
     date = days <= 7 ? WEIGHTS.date : days <= 30 ? 3 : 0;
   }

@@ -57,24 +57,22 @@ async function request(path, { method = 'GET', body, params, signal } = {}) {
 }
 
 export const api = {
-  dashboard: (opts) => request('/dashboard', opts),
-  search: (params, opts) => request('/search', { params, ...opts }),
+  overview: (opts) => request('/overview', opts),
+  // Live web investigation: the Brave key never reaches the browser
+  investigateWeb: (query) => request('/investigate-web', { method: 'POST', body: { query, async: true } }),
+  webSearchStatus: (id, opts) => request(`/web-search/${id}/status`, opts),
+  webSearchResults: (id, opts) => request(`/web-search/${id}/results`, opts),
   claims: (params, opts) => request('/claims', { params, ...opts }),
   claim: (id, opts) => request(`/claims/${id}`, opts),
   claimSources: (id, opts) => request(`/claims/${id}/sources`, opts),
-  claimVariants: (id, opts) => request(`/claims/${id}/variants`, opts),
   claimMutations: (id, opts) => request(`/claims/${id}/mutations`, opts),
   claimLineage: (id, opts) => request(`/claims/${id}/claim-lineage`, opts),
   sourceLineage: (id, opts) => request(`/claims/${id}/source-lineage`, opts),
   sources: (params, opts) => request('/sources', { params, ...opts }),
   source: (id, opts) => request(`/sources/${id}`, opts),
   platforms: (opts) => request('/platforms', opts),
-  categories: (opts) => request('/categories', opts),
-  entities: (params, opts) => request('/entities', { params, ...opts }),
   ingestionStatus: (opts) => request('/ingestion/status', opts),
-  ingestionFeed: (params, opts) => request('/ingestion/feed', { params, ...opts }),
   refresh: () => request('/ingestion/refresh', { method: 'POST' }),
   lab: (opts) => request('/lab', opts),
   labQuery: (key, opts) => request(`/lab/queries/${encodeURIComponent(key)}`, opts),
-  health: (opts) => request('/health', opts),
 };

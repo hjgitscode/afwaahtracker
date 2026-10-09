@@ -44,11 +44,6 @@ export function domainOf(url) {
   }
 }
 
-export const titleCase = (s) =>
-  String(s || '')
-    .toLowerCase()
-    .replace(/(^|[\s_-])([a-z])/g, (m, p, c) => `${p === '_' ? ' ' : p}${c.toUpperCase()}`);
-
 export const truncate = (s, n = 80) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s || '');
 
 export const SOURCE_TYPE_LABEL = { GDELT: 'GDELT', HACKER_NEWS: 'Hacker News', RSS: 'RSS / Atom' };

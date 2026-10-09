@@ -1,9 +1,8 @@
-import { getIngestionStatus, getLiveFeed } from '../services/ingestionService.js';
+import { getIngestionStatus } from '../services/ingestionService.js';
 import { triggerIngestion } from '../ingestion/scheduler.js';
 import { getConnection } from '../db/pool.js';
 
 export const status = async (req, res) => res.json(await getIngestionStatus());
-export const feed = async (req, res) => res.json(await getLiveFeed(req.query));
 
 /**
  * Fetches every enabled ingestion source now. The request waits for the

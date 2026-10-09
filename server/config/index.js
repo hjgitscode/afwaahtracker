@@ -43,6 +43,21 @@ const config = {
     strongThreshold: int(process.env.MATCH_STRONG_THRESHOLD, 75),
     candidateThreshold: int(process.env.MATCH_CANDIDATE_THRESHOLD, 55),
   },
+  webSearch: {
+    // Read only on the server. Never sent to the browser.
+    braveApiKey: (process.env.BRAVE_SEARCH_API_KEY || '').trim(),
+    braveEndpoint: process.env.BRAVE_SEARCH_ENDPOINT || 'https://api.search.brave.com/res/v1/web/search',
+    // Brave returns at most 20 results per request; 2 pages = up to 40 results.
+    resultsPerPage: Math.min(20, Math.max(1, int(process.env.WEB_SEARCH_RESULTS_PER_PAGE, 20))),
+    pages: Math.min(3, Math.max(1, int(process.env.WEB_SEARCH_PAGES, 2))),
+    country: process.env.WEB_SEARCH_COUNTRY || '',
+    fetchTimeoutMs: int(process.env.WEB_FETCH_TIMEOUT_MS, 9000),
+    fetchMaxBytes: int(process.env.WEB_FETCH_MAX_BYTES, 1_500_000),
+    fetchConcurrency: Math.min(6, Math.max(1, int(process.env.WEB_FETCH_CONCURRENCY, 5))),
+    respectRobots: bool(process.env.WEB_FETCH_RESPECT_ROBOTS, true),
+    // Only for local testing against a mock server. Keep false.
+    allowPrivateHosts: bool(process.env.WEB_FETCH_ALLOW_PRIVATE, false),
+  },
 };
 
 export default config;

@@ -6,11 +6,11 @@ import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { normaliseUrl } from '../ingestion/normalizer.js';
 
 const SORTS = {
-  newest: 's.published_at DESC, s.source_id DESC',
-  oldest: 's.published_at ASC, s.source_id ASC',
+  newest: 's.published_at DESC NULLS LAST, s.source_id DESC',
+  oldest: 's.published_at ASC NULLS LAST, s.source_id ASC',
   fetched: 's.fetched_at DESC, s.source_id DESC',
-  publisher: 'LOWER(s.publisher) ASC, s.published_at DESC',
-  engagement: 's.engagement_count DESC, s.published_at DESC',
+  publisher: 'LOWER(s.publisher) ASC, s.published_at DESC NULLS LAST',
+  engagement: 's.engagement_count DESC, s.published_at DESC NULLS LAST',
 };
 
 const toInt = (v) => {
@@ -27,7 +27,9 @@ const toDate = (v) => {
 const SOURCE_SELECT = `
   SELECT s.source_id, s.publisher, s.author, s.source_title, s.source_url, s.linked_url,
          s.external_source_id, s.published_at, s.fetched_at, s.snippet, s.engagement_count,
-         s.source_status, s.origin_type, s.derived_from_source_id, s.provenance_note,
+         s.source_status, s.origin_type, s.derived_from_source_id, s.provenance_note, s.canonical_url,
+         CASE s.origin_type WHEN 'AUTOMATED' THEN 'FEED' ELSE s.origin_type END AS retrieval_method,
+         (SELECT COUNT(*) FROM source_references r WHERE r.from_source_id = s.source_id) AS reference_count,
          p.platform_id, p.platform_name, p.platform_type,
          i.source_name AS ingestion_source_name, i.source_type AS ingestion_source_type,
          parent.publisher AS derived_from_publisher,
@@ -65,16 +67,26 @@ export async function listSources(params = {}) {
     binds.platform_id = platformId;
     where.push('s.platform_id = :platform_id');
   }
-  if (['DEMO', 'AUTOMATED', 'MANUAL'].includes(params.origin)) {
-    binds.origin = params.origin;
+  // Retrieval method: DEMO | FEED (scheduled feeds) | WEB_SEARCH | MANUAL
+  const origin = params.retrieval === 'FEED' ? 'AUTOMATED' : params.retrieval || params.origin;
+  if (['DEMO', 'AUTOMATED', 'WEB_SEARCH', 'MANUAL'].includes(origin)) {
+    binds.origin = origin;
     where.push('s.origin_type = :origin');
   }
+  const runId = toInt(params.run);
+  if (runId) {
+    binds.run_id = runId;
+    where.push('EXISTS (SELECT 1 FROM search_result_links l WHERE l.source_id = s.source_id AND l.search_run_id = :run_id)');
+  }
+  if (params.claimLinked === 'N') where.push('NOT EXISTS (SELECT 1 FROM claim_variants cv WHERE cv.source_id = s.source_id)');
   if (['GDELT', 'HACKER_NEWS', 'RSS'].includes(params.sourceType)) {
     binds.source_type = params.sourceType;
     where.push('i.source_type = :source_type');
   }
-  if (['INDEPENDENT', 'DERIVED'].includes(params.dependency)) {
-    where.push(params.dependency === 'DERIVED' ? 's.derived_from_source_id IS NOT NULL' : 's.derived_from_source_id IS NULL');
+  if (['INDEPENDENT', 'DERIVED', 'KNOWN_DERIVED', 'NO_KNOWN_UPSTREAM'].includes(params.dependency)) {
+    where.push(['DERIVED', 'KNOWN_DERIVED'].includes(params.dependency)
+      ? 's.derived_from_source_id IS NOT NULL'
+      : 's.derived_from_source_id IS NULL');
   }
   const claimId = toInt(params.claim);
   if (claimId) {
@@ -120,7 +132,7 @@ export async function getSource(id) {
     const source = await db.one(`${SOURCE_SELECT} ${SOURCE_FROM} WHERE s.source_id = :id`, { id });
     if (!source) throw new NotFoundError(`Source #${id} does not exist.`);
 
-    const [claims, derivedChildren, lineage] = await Promise.all([
+    const [claims, derivedChildren, lineage, references, searchRuns] = await Promise.all([
       db.rows(
         `SELECT v.claim_id, c.canonical_claim, c.status, v.variant_id, v.variant_text, v.certainty,
                 v.match_score, v.match_method, v.match_breakdown
@@ -133,7 +145,7 @@ export async function getSource(id) {
         `SELECT s.source_id, s.publisher, s.source_title, s.published_at, p.platform_name
            FROM sources s JOIN platforms p ON p.platform_id = s.platform_id
           WHERE s.derived_from_source_id = :id
-          ORDER BY s.published_at`,
+          ORDER BY s.published_at NULLS LAST`,
         { id }
       ),
       // Upstream chain to the earliest known origin (hierarchical query, walking upwards)
@@ -145,8 +157,36 @@ export async function getSource(id) {
           ORDER BY LEVEL DESC`,
         { id }
       ),
+      // Explicit evidence in both directions (VW_SOURCE_REFERENCES)
+      db.rows(
+        `SELECT reference_id, reference_type, confidence_basis, detected_at, sets_dependence,
+                CASE WHEN from_source_id = :id THEN 'OUTGOING' ELSE 'INCOMING' END AS direction,
+                CASE WHEN from_source_id = :id THEN to_source_id ELSE from_source_id END AS other_source_id,
+                CASE WHEN from_source_id = :id THEN to_publisher ELSE from_publisher END AS other_publisher,
+                CASE WHEN from_source_id = :id THEN to_title ELSE from_title END AS other_title,
+                CASE WHEN from_source_id = :id THEN to_url ELSE from_url END AS other_url
+           FROM vw_source_references
+          WHERE from_source_id = :id OR to_source_id = :id
+          ORDER BY direction DESC, detected_at`,
+        { id }
+      ),
+      db.rows(
+        `SELECT r.search_run_id, r.query_text, r.started_at, l.search_rank, l.result_snippet, l.was_duplicate
+           FROM search_result_links l JOIN web_search_runs r ON r.search_run_id = l.search_run_id
+          WHERE l.source_id = :id
+          ORDER BY r.started_at DESC
+          FETCH FIRST 10 ROWS ONLY`,
+        { id }
+      ),
     ]);
-    return { ...source, claims, derived_children: derivedChildren, upstream_chain: lineage };
+    return {
+      ...source,
+      claims,
+      derived_children: derivedChildren,
+      upstream_chain: lineage,
+      references,
+      search_runs: searchRuns,
+    };
   });
 }
 
@@ -211,7 +251,19 @@ export async function insertSource(db, body) {
       id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
     }
   );
-  return r.outBinds.id[0];
+  const sourceId = r.outBinds.id[0];
+  await recordManualReference(db, sourceId, s.derived_from_source_id);
+  return sourceId;
+}
+
+/** A manually entered upstream source is recorded as MANUAL evidence. */
+async function recordManualReference(db, sourceId, upstreamId) {
+  if (!upstreamId || upstreamId === sourceId) return;
+  await db.exec(`BEGIN :n := record_source_reference(:f, :t, 'MANUAL', 'Upstream source entered manually.'); END;`, {
+    n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+    f: sourceId,
+    t: upstreamId,
+  });
 }
 
 export async function createSource(body = {}) {
@@ -232,9 +284,11 @@ export async function updateSource(id, body = {}) {
   cols.forEach((c) => {
     binds[c] = s[c];
   });
-  const result = await withTransaction((db) =>
-    db.exec(`UPDATE sources SET ${cols.map((c) => `${c} = :${c}`).join(', ')} WHERE source_id = :id`, binds)
-  );
+  const result = await withTransaction(async (db) => {
+    const r = await db.exec(`UPDATE sources SET ${cols.map((c) => `${c} = :${c}`).join(', ')} WHERE source_id = :id`, binds);
+    if (r.rowsAffected) await recordManualReference(db, id, s.derived_from_source_id);
+    return r;
+  });
   if (!result.rowsAffected) throw new NotFoundError(`Source #${id} does not exist.`);
   return getSource(id);
 }

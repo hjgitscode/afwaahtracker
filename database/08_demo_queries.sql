@@ -1,6 +1,6 @@
 --------------------------------------------------------------------------------
 -- AfwaahTracker :: 08_demo_queries.sql
--- 30 read-only demonstration queries. Each is labelled with the SQL concept
+-- 37 read-only demonstration queries. Each is labelled with the SQL concept
 -- it demonstrates. Run after install.sql:
 --     sqlplus afwaah/afwaah@localhost:1521/FREEPDB1 @08_demo_queries.sql
 -- Substitution variables are not used; literal search terms are shown so the
@@ -269,3 +269,38 @@ SELECT table_name, operation, record_id, changed_at
   FROM audit_log
  ORDER BY audit_id DESC
  FETCH FIRST 10 ROWS ONLY;
+
+PROMPT ===== Q33. Live web search runs and what each stored (view over WEB_SEARCH_RUNS) =====
+SELECT search_run_id, SUBSTR(query_text, 1, 40) AS query_text, status,
+       results_received, sources_inserted, duplicates_skipped, pages_failed, claim_families
+  FROM vw_web_search_runs
+ ORDER BY started_at DESC
+ FETCH FIRST 10 ROWS ONLY;
+
+PROMPT ===== Q34. Sources returned by one search run, in search rank order (M:N junction) =====
+SELECT l.search_rank, s.publisher, p.platform_name, l.was_duplicate,
+       NVL(TO_CHAR(s.published_at, 'YYYY-MM-DD'), 'Not determined') AS published
+  FROM search_result_links l
+  JOIN sources   s ON s.source_id = l.source_id
+  JOIN platforms p ON p.platform_id = s.platform_id
+ WHERE l.search_run_id = (SELECT MAX(search_run_id) FROM web_search_runs)
+ ORDER BY l.search_rank;
+
+PROMPT ===== Q35. Explicit evidence between sources and whether it set source dependence =====
+SELECT reference_type, SUBSTR(from_publisher, 1, 30) AS from_source,
+       SUBSTR(to_publisher, 1, 30) AS to_source, sets_dependence
+  FROM vw_source_references
+ ORDER BY detected_at DESC
+ FETCH FIRST 15 ROWS ONLY;
+
+PROMPT ===== Q36. How each wording parent was chosen (GROUP BY lineage_basis) =====
+SELECT lineage_basis, COUNT(*) AS variants,
+       SUM(CASE WHEN parent_variant_id IS NULL THEN 1 ELSE 0 END) AS without_parent
+  FROM claim_variants
+ GROUP BY lineage_basis
+ ORDER BY variants DESC;
+
+PROMPT ===== Q37. Deterministic wording similarity (PL/SQL function used for inferred predecessors) =====
+SELECT wording_similarity('Aakash Gupta may visit VIT', 'Aakash Gupta will perform at VIT Vibrance') AS similar_pair,
+       wording_similarity('Aakash Gupta may visit VIT', 'Exam results postponed by the board')    AS unrelated_pair
+  FROM dual;

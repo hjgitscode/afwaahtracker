@@ -2,7 +2,7 @@
 
 All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `database/install.sql` runs them in dependency order.
 
-## Tables (16)
+## Tables (19)
 
 | Table | Purpose | Key relationships |
 |---|---|---|
@@ -22,6 +22,11 @@ All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `dat
 | `FINGERPRINTS` | Structured signature, 1:1 with a claim | UNIQUE FK claim |
 | `CLAIM_MUTATIONS` | Mutation Ledger: one row per changed component | FK claim, parent and child variant |
 | `AUDIT_LOG` | Trigger-written audit trail | |
+| `WEB_SEARCH_RUNS` | One row per live web investigation, with its counts and status | |
+| `SEARCH_RESULT_LINKS` | M:N search runs ↔ sources, with rank, provider, snippet | composite PK, FK run and source (CASCADE) |
+| `SOURCE_REFERENCES` | Explicit evidence that one stored source points at another | FK from/to source; UNIQUE (from, to, type) |
+
+`SOURCES.published_at` is nullable: an unknown publication date is stored as `NULL`, never guessed. `SOURCES.canonical_url` holds a page's canonical URL when it differs. `origin_type` is `DEMO`, `AUTOMATED` (feeds), `WEB_SEARCH` or `MANUAL`.
 
 ## Integrity
 
@@ -50,6 +55,13 @@ All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `dat
 | `INGEST_SOURCE(...)` | function | deduplicated insert. Returns 0 for a duplicate and records deterministic provenance from `linked_url` |
 | `START_INGESTION_RUN` / `FINISH_INGESTION_RUN` | function / procedure | open and close `INGESTION_LOG` rows |
 | `LINK_CLAIM_ENTITY`, `LINK_CLAIM_KEYWORD`, `RECORD_ENTITY_CANDIDATE` | procedures | `MERGE`-based upserts |
+| `FIND_SOURCE_ID(url, canonical, platform, external_id)` | function | duplicate lookup used before fetching and storing |
+| `START_WEB_SEARCH_RUN` / `FINISH_WEB_SEARCH_RUN` | function / procedure | open and close `WEB_SEARCH_RUNS` rows |
+| `RECORD_SEARCH_RESULT_LINK`, `RECORD_SOURCE_REFERENCE` | procedure / function | `MERGE`-based links between runs, sources and evidence |
+| `WORDING_SIMILARITY(a, b)` | function | deterministic 0–100 similarity (word overlap + Jaro-Winkler) |
+| `CHOOSE_VARIANT_PARENT(...)` | procedure | explicit reference › inferred lexical predecessor › none |
+| `APPLY_SOURCE_DEPENDENCE(source_id)` | function | sets `derived_from_source_id` only from explicit references within the same claim family |
+| `RELINK_CLAIM_LINEAGE(claim_id)` | procedure | recomputes automatic wording parents (used by the migration) |
 
 ## Triggers
 
@@ -69,14 +81,16 @@ All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `dat
 - `VW_SOURCE_LINEAGE`: hierarchical (`CONNECT BY`) root, depth and path for every source
 - `VW_RECENT_CLAIMS`: the 20 most recently active claim families
 - `VW_INGESTION_STATUS`: registry plus the latest run (analytic `ROW_NUMBER`)
+- `VW_WEB_SEARCH_RUNS`: each run with its duration, linked sources and claim-family count
+- `VW_SOURCE_REFERENCES`: references with both publishers and whether the reference set source dependence
 
 ## Indexes
 
-There are 21 explicit indexes: B-tree indexes on every foreign-key column, on frequent filters (`published_at`, `(origin_type, fetched_at)`, `status`), function-based indexes for case-insensitive search (`LOWER(canonical_claim)`, `LOWER(publisher)`, `LOWER(entity_name)`, `LOWER(alias_text)`), and the function-based unique index for external ids. Constraints add 28 more indexes for primary and unique keys.
+There are 26 explicit indexes: B-tree indexes on every foreign-key column (including `SEARCH_RESULT_LINKS.source_id` and `SOURCE_REFERENCES.to_source_id`), on frequent filters (`published_at`, `(origin_type, fetched_at)`, `status`, `WEB_SEARCH_RUNS.started_at`, `canonical_url`), function-based indexes for case-insensitive search (`LOWER(canonical_claim)`, `LOWER(publisher)`, `LOWER(source_title)`, `LOWER(entity_name)`, `LOWER(alias_text)`), and the function-based unique index for external ids. Constraints add further indexes for primary and unique keys (58 in total).
 
 ## Transactions
 
-- Every ingested item is one transaction (source → claim/fingerprint → variant → ledger → entity and keyword links). A failure rolls back that item only.
+- Every ingested feed item and every web search result is one transaction (source → run link → references → claim/fingerprint → variant → ledger → dependence → entity and keyword links). A failure rolls back that item only.
 - `ADD_CLAIM_VARIANT` uses `SAVEPOINT` and `ROLLBACK TO SAVEPOINT`.
 - The seed loads as one transaction and ends with `COMMIT`.
 - Audit rows are written in the caller's transaction, so a rollback leaves no orphaned audit entries.
@@ -88,9 +102,9 @@ There are 21 explicit indexes: B-tree indexes on every foreign-key column, on fr
 Echo Ratio = derived sources / total sources × 100
 ```
 
-A source is *derived* when `SOURCES.derived_from_source_id` is known. Demonstration data states its dependencies explicitly. Automatically ingested data only gets a parent when provenance is deterministic: an item whose submitted link matches an already stored `source_url`, such as a Hacker News thread about a stored article. Publication order alone is never treated as evidence of copying.
+A source is *derived* when `SOURCES.derived_from_source_id` is known. Demonstration data states its dependencies explicitly. Live data only gets a parent from explicit evidence: a hyperlink to a stored source in the same claim family, or a submitted link that matches a stored URL. Publication order and text similarity alone are never treated as evidence of copying. For live data the UI therefore says **Known Echo Ratio**, **Known derived** and **No known upstream source**.
 
-Echo Ratio measures source dependence, not truthfulness. It is not an accuracy or misinformation score.
+Known Echo Ratio measures detected source dependence among retrieved sources. It does not prove that sources without a known parent are independent, and it does not measure truthfulness.
 
 ## Seed dataset
 

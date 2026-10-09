@@ -58,35 +58,50 @@ export function splitScript(text) {
   return statements;
 }
 
-async function main() {
-  const install = fs.readFileSync(path.join(dbDir, 'install.sql'), 'utf8');
-  const files = [...install.matchAll(/^@@(\S+)/gm)].map((m) => m[1]);
+export async function connect() {
   console.log(`Connecting to ${config.db.connectString} as ${config.db.user} ...`);
-  const conn = await oracledb.getConnection({
+  return oracledb.getConnection({
     user: config.db.user,
     password: config.db.password,
     connectString: config.db.connectString,
   });
+}
+
+/** Runs the given database/*.sql files in order, then recompiles the schema. */
+export async function runFiles(conn, files) {
+  for (const file of files) {
+    const statements = splitScript(fs.readFileSync(path.join(dbDir, file), 'utf8'));
+    process.stdout.write(`  ${file.padEnd(28)} ${String(statements.length).padStart(4)} statements ... `);
+    for (const st of statements) {
+      try {
+        await conn.execute(st.sql);
+      } catch (err) {
+        console.log('FAILED');
+        console.error(`\nStatement in ${file} failed:\n${st.sql.slice(0, 400)}\n\n${err.message}`);
+        await conn.rollback().catch(() => {});
+        process.exit(1);
+      }
+    }
+    await conn.commit();
+    console.log('ok');
+  }
+  await conn.execute(`BEGIN DBMS_UTILITY.COMPILE_SCHEMA(schema => USER, compile_all => FALSE); END;`);
+  const invalid = await conn.execute(
+    `SELECT object_type || ' ' || object_name FROM user_objects WHERE status <> 'VALID' ORDER BY 1`
+  );
+  if (invalid.rows.length) {
+    console.error(`\nInvalid objects after install: ${invalid.rows.map((r) => r[0]).join(', ')}`);
+    process.exit(1);
+  }
+}
+
+async function main() {
+  const install = fs.readFileSync(path.join(dbDir, 'install.sql'), 'utf8');
+  const files = [...install.matchAll(/^@@(\S+)/gm)].map((m) => m[1]);
+  const conn = await connect();
 
   try {
-    for (const file of files) {
-      const statements = splitScript(fs.readFileSync(path.join(dbDir, file), 'utf8'));
-      process.stdout.write(`  ${file.padEnd(26)} ${String(statements.length).padStart(4)} statements ... `);
-      for (const st of statements) {
-        try {
-          await conn.execute(st.sql);
-        } catch (err) {
-          console.log('FAILED');
-          console.error(`\nStatement in ${file} failed:\n${st.sql.slice(0, 400)}\n\n${err.message}`);
-          await conn.rollback().catch(() => {});
-          process.exit(1);
-        }
-      }
-      await conn.commit();
-      console.log('ok');
-    }
-
-    await conn.execute(`BEGIN DBMS_UTILITY.COMPILE_SCHEMA(schema => USER, compile_all => FALSE); END;`);
+    await runFiles(conn, files);
     const objects = await conn.execute(
       `SELECT object_type, COUNT(*) AS total, SUM(CASE WHEN status = 'VALID' THEN 1 ELSE 0 END) AS valid
          FROM user_objects

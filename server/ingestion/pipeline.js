@@ -4,13 +4,9 @@
  * For each enabled INGESTION_SOURCES row:
  *   1. START_INGESTION_RUN  opens an INGESTION_LOG row          (COMMIT)
  *   2. adapter fetches + normalises items (GDELT / Hacker News / RSS)
- *   3. per item, in ONE transaction:
- *        INGEST_SOURCE      deduplicated insert (0 = duplicate -> skipped)
- *        rule-based analysis (entities, keywords, certainty, action)
- *        FIND best claim    candidate retrieval in SQL, weighted score
- *        ADD_CLAIM_VARIANT  attach to an existing claim or a new CANDIDATE claim
- *        link entities / keywords / entity candidates
- *      COMMIT, or ROLLBACK if anything fails for that item
+ *   3. per item, in ONE transaction, the shared steps in sourceProcessor.js
+ *      (deduplicated insert, rule-based matching, evidence-based lineage,
+ *      Mutation Ledger via trigger), then COMMIT - or ROLLBACK of that item only
  *   4. FINISH_INGESTION_RUN closes the log row                 (COMMIT)
  *
  * If a source is unreachable the run is logged as FAILED and the
@@ -21,8 +17,8 @@ import { fetchGdelt } from './gdelt.js';
 import { fetchHackerNews } from './hackerNews.js';
 import { fetchRss } from './rss.js';
 import { describeFetchError } from './http.js';
-import { loadDictionary, detectEntities, detectKnownKeywords, detectEntityCandidates } from './entityMatcher.js';
-import { detectCertainty, detectAction, detectQuantity, frequentTerms, findBestClaim, classify, describeBreakdown } from './matcher.js';
+import { loadDictionary } from './entityMatcher.js';
+import { processSourceItem } from './sourceProcessor.js';
 
 const ADAPTERS = {
   GDELT: fetchGdelt,
@@ -32,159 +28,18 @@ const ADAPTERS = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function analyseItem(item, dictionary) {
-  // Entities and keywords come from the headline only; snippets are often
-  // boilerplate and would add unrelated entities to the comparison.
-  const entities = detectEntities(item.title, dictionary);
-  const keywords = detectKnownKeywords(item.title, dictionary);
-  const firstOf = (type) => entities.find((e) => e.type === type)?.name || null;
-  return {
-    title: item.title,
-    publishedAt: item.publishedAt,
-    entities,
-    keywords,
-    certainty: detectCertainty(item.title),
-    action: detectAction(item.title),
-    quantity: detectQuantity(item.title),
-    actor: firstOf('PERSON') || firstOf('ORGANISATION'),
-    location: firstOf('LOCATION'),
-    event: firstOf('EVENT'),
-    autoTerms: frequentTerms(item.title, entities.map((e) => e.alias).concat(keywords.map((k) => k.text))),
-    candidates: detectEntityCandidates(item.title, entities),
-  };
-}
-
-async function processItem(source, item, dictionary) {
-  return withTransaction(async (db) => {
-    // 1. Deduplicated insert (PL/SQL function, bind variables only)
-    const ins = await db.exec(
-      `BEGIN
-         :id := ingest_source(:platform_id, :ingestion_source_id, :publisher, :author, :title,
-                              :url, :linked_url, :external_id, :published_at, :snippet, :engagement);
-       END;`,
-      {
-        id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-        platform_id: source.platform_id,
-        ingestion_source_id: source.ingestion_source_id,
-        publisher: item.publisher,
-        author: item.author,
-        title: item.title,
-        url: item.url,
-        linked_url: item.linkedUrl,
-        external_id: item.externalId,
-        published_at: { val: item.publishedAt, type: oracledb.DATE },
-        snippet: item.snippet,
-        engagement: item.engagement,
-      }
-    );
-    const sourceId = ins.outBinds.id;
-    if (!sourceId) return { status: 'SKIPPED' };
-
-    // 2. Deterministic analysis + 3. rule-based matching
-    const analysis = analyseItem(item, dictionary);
-    const best = await findBestClaim(db, analysis);
-    const bestScore = best ? best.score.total : 0;
-    const method = best ? classify(bestScore) : 'NEW_CLAIM';
-
-    let claimId;
-    let parentVariantId = null;
-    let lineageBasis = 'NONE';
-    let breakdown;
-
-    if (method === 'NEW_CLAIM') {
-      const created = await db.exec(
-        `INSERT INTO claims (canonical_claim, category_id, status, claim_origin, summary)
-         VALUES (:text, :category_id, 'CANDIDATE', 'AUTOMATED', :summary)
-         RETURNING claim_id INTO :claim_id`,
-        {
-          text: item.title.slice(0, 500),
-          category_id: source.default_category_id,
-          summary: `Candidate claim created automatically from ${source.source_name}.`,
-          claim_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-        }
-      );
-      claimId = created.outBinds.claim_id[0];
-      // Only fields that can be inferred deterministically are filled;
-      // sentiment, emotional hook and manipulation marker stay NULL.
-      await db.exec(
-        `INSERT INTO fingerprints (claim_id, core_assertion, source_pattern, notes, is_curated)
-         VALUES (:claim_id, :core, :pattern, :notes, 'N')`,
-        {
-          claim_id: claimId,
-          core: item.title.slice(0, 500),
-          pattern: `Automatically ingested from ${source.source_type.replace('_', ' ')}`,
-          notes: 'Not yet curated. Only deterministic fields were filled automatically.',
-        }
-      );
-      breakdown = best
-        ? `New claim. Best existing match was claim #${best.claimId} at ${bestScore} (${describeBreakdown(best.score.parts)}).`
-        : 'New claim. No existing claim shared an entity or keyword.';
-    } else {
-      claimId = best.claimId;
-      breakdown = describeBreakdown(best.score.parts);
-      // Wording lineage for automated matches is anchored to the claim's
-      // earliest variant (documented as AUTO_ROOT, not as copying).
-      const root = await db.one(
-        `SELECT v.variant_id
-           FROM claim_variants v
-           JOIN sources s ON s.source_id = v.source_id
-          WHERE v.claim_id = :claim_id
-          ORDER BY s.published_at, v.variant_id
-          FETCH FIRST 1 ROWS ONLY`,
-        { claim_id: claimId }
-      );
-      if (root) {
-        parentVariantId = root.variant_id;
-        lineageBasis = 'AUTO_ROOT';
-      }
-    }
-
-    // 4. Variant via PL/SQL procedure (trigger generates the Mutation Ledger)
-    await db.exec(
-      `BEGIN
-         add_claim_variant(
-           p_claim_id => :claim_id, p_source_id => :source_id, p_parent_variant_id => :parent_id,
-           p_variant_text => :text, p_actor => :actor, p_action => :action,
-           p_target_object => NULL, p_location_name => :location, p_event_name => :event,
-           p_claimed_date => NULL, p_quantity_value => :quantity, p_certainty => :certainty,
-           p_attribution => :attribution, p_match_score => :score, p_match_method => :method,
-           p_lineage_basis => :basis, p_match_breakdown => :breakdown, o_variant_id => :variant_id);
-       END;`,
-      {
-        claim_id: claimId,
-        source_id: sourceId,
-        parent_id: parentVariantId,
-        text: item.title.slice(0, 1000),
-        actor: analysis.actor,
-        action: analysis.action,
-        location: analysis.location,
-        event: analysis.event,
-        quantity: analysis.quantity,
-        certainty: analysis.certainty,
-        attribution: item.publisher,
-        score: bestScore,
-        method,
-        basis: lineageBasis,
-        breakdown: breakdown.slice(0, 400),
-        variant_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-      }
-    );
-
-    // 5. Entity / keyword links (MERGE procedures) and unknown-entity candidates
-    for (const ent of analysis.entities) {
-      await db.exec(`BEGIN link_claim_entity(:claim_id, :entity_id, 'DICTIONARY'); END;`, { claim_id: claimId, entity_id: ent.entityId });
-    }
-    const keywordTexts = new Set(analysis.keywords.map((k) => k.text));
-    if (method === 'NEW_CLAIM') analysis.autoTerms.forEach((t) => keywordTexts.add(t));
-    for (const kw of keywordTexts) {
-      await db.exec(`BEGIN link_claim_keyword(:claim_id, :kw, 'AUTO'); END;`, { claim_id: claimId, kw });
-    }
-    for (const cand of analysis.candidates) {
-      await db.exec(`BEGIN record_entity_candidate(:text, :source_id); END;`, { text: cand, source_id: sourceId });
-    }
-
-    return { status: 'INSERTED', matched: method !== 'NEW_CLAIM', sourceId, claimId, method, score: bestScore };
-  });
+// One feed item = one transaction (see sourceProcessor.js for the steps).
+function processItem(source, item, dictionary) {
+  return withTransaction((db) =>
+    processSourceItem(db, item, {
+      platformId: source.platform_id,
+      ingestionSourceId: source.ingestion_source_id,
+      categoryId: source.default_category_id,
+      origin: 'AUTOMATED',
+      originLabel: source.source_name,
+      dictionary,
+    })
+  );
 }
 
 export async function runSource(source) {
@@ -208,7 +63,7 @@ export async function runSource(source) {
     const items = await adapter(source);
     counts.fetched = items.length;
 
-    const dictionary = await withConnection((db) => loadDictionary(db));
+    let dictionary = await withConnection((db) => loadDictionary(db));
     // Remove duplicates inside one batch before touching the database
     const seen = new Set();
     for (const item of items) {
@@ -222,7 +77,9 @@ export async function runSource(source) {
         if (res.status === 'SKIPPED') counts.skipped += 1;
         else {
           counts.inserted += 1;
-          if (res.matched) counts.matched += 1;
+          if (res.claimId && !res.newClaim) counts.matched += 1;
+          // keywords of a newly created claim must be visible to the next items
+          if (res.newClaim) dictionary = await withConnection((db) => loadDictionary(db, { force: true }));
         }
       } catch (err) {
         counts.errors += 1;

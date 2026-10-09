@@ -20,22 +20,23 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 | Method & path | Description |
 |---|---|
 | `GET /health` | API and database status, pool statistics |
-| `GET /dashboard` | Metrics, high-echo claims, most repeated, platform and category distribution, recent claims, 14-day ingestion activity, last refresh by source type |
-| `GET /search?q=` | Same as `/claims`, ordered by relevance. Every term must match the claim, a variant, a source title or publisher, an entity alias or a keyword |
-| `GET /claims` | Claim families from `VW_CLAIM_OVERVIEW`. Query params: `q`, `platform` (id), `category` (id), `status` (`UNVERIFIED`… or `CURATED` = everything except candidates), `echoBand`, `dateFrom`, `dateTo`, `sourceType` (`DEMO`, `AUTOMATED`, `MANUAL`, `GDELT`, `HACKER_NEWS`, `RSS`), `sort` (`newest`, `sources`, `echo`, `platforms`, `relevance`), `limit` (≤100), `offset` |
+| `GET /overview` | Home overview: claim, source, web-run and reference counts, the latest investigations, `webSearchAvailable` (`/dashboard` is an alias) |
+| `GET /web-search/:runId/status` | Progress of a run: `status`, current `stage` (searching, normalising, removing duplicates, fetching, matching, building relationships) and the counts |
+| `GET /web-search/:runId/results` | The run (`VW_WEB_SEARCH_RUNS`), its claim families (with `run_sources` and `strong_family`), `strongFamilyDetected`, related sources and stored claim families that match the query |
+| `GET /web-search?limit=` | Recent web search runs |
+| `GET /claims` | Claim families from `VW_CLAIM_OVERVIEW`. Query params: `q`, `platform` (id), `category` (id), `status` (`UNVERIFIED`… or `CURATED` = everything except candidates), `echoBand`, `dateFrom`, `dateTo`, `origin` (`LIVE`, `DEMO`), `run` (search run id), `sourceType` (`DEMO`, `AUTOMATED`, `WEB_SEARCH`, `MANUAL`, `GDELT`, `HACKER_NEWS`, `RSS`), `sort` (`newest`, `sources`, `echo`, `platforms`, `relevance`), `limit` (≤100), `offset` |
 | `GET /claims/:id` | Overview, PL/SQL Echo Ratio (`echo_ratio_plsql`), fingerprint, entities, keywords, platforms |
-| `GET /claims/:id/sources` | Sources and claim versions (`VW_CLAIM_SOURCES`), with dependency, upstream publisher and an `is_earliest` flag |
+| `GET /claims/:id/sources` | Sources and claim versions (`VW_CLAIM_SOURCES`), with dependency, upstream publisher, `lineage_basis`, match breakdown and an `is_earliest` flag (first dated source; undated sources sort last) |
 | `GET /claims/:id/variants` | Structured variants with match score, method and breakdown |
 | `GET /claims/:id/mutations` | Mutation Ledger rows with from/to source details |
 | `GET /claims/:id/claim-lineage` | `{ nodes, edges }` from a `CONNECT BY` over `parent_variant_id` |
 | `GET /claims/:id/source-lineage` | `{ nodes, edges }`: the claim's sources plus every upstream ancestor |
-| `GET /sources` | Query params: `q` (publisher/title/URL/author/claim), `platform`, `origin`, `sourceType`, `dependency`, `claim`, `dateFrom`, `dateTo`, `sort` (`newest`, `oldest`, `fetched`, `publisher`, `engagement`), `limit`, `offset` |
-| `GET /sources/:id` | Source, linked claims, derived children and upstream chain |
+| `GET /sources` | Query params: `q` (publisher/title/URL/author/claim), `platform`, `retrieval` (`WEB_SEARCH`, `FEED`, `MANUAL`, `DEMO`), `run`, `sourceType`, `dependency` (`KNOWN_DERIVED`, `NO_KNOWN_UPSTREAM`), `claim`, `dateFrom`, `dateTo`, `sort` (`newest`, `oldest`, `fetched`, `publisher`, `engagement`), `limit`, `offset` |
+| `GET /sources/:id` | Source, linked claims, derived children, upstream chain, explicit references in both directions and the search runs that returned it |
 | `GET /platforms` | `VW_PLATFORM_STATISTICS` |
 | `GET /categories` | Categories with claim counts |
 | `GET /entities?type=&q=` | Entity dictionary with aliases and claim counts |
-| `GET /ingestion/status` | Scheduler state, 24-hour summary, last refresh per type, every feed's latest run, the last 25 runs |
-| `GET /ingestion/feed?limit=&sourceType=` | Latest automatically ingested sources with their matched claim and score |
+| `GET /ingestion/status` | Background feeds: scheduler state, 24-hour summary, every feed's latest run, the last 25 runs, 14-day activity |
 | `GET /lab` | Schema introspection (object counts, constraints, relationships, PL/SQL units, views, indexes, row counts) and the example query list |
 | `GET /lab/queries/:key` | Runs one **whitelisted** read-only example query. Arbitrary SQL is never accepted |
 
@@ -43,6 +44,7 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 
 | Method & path | Body |
 |---|---|
+| `POST /investigate-web` | `{ query, async? }`. Creates a `WEB_SEARCH_RUNS` row, searches Brave, stores and analyses each result in its own transaction, then returns `{ searchRunId, query, status, resultsReceived, sourcesAnalysed, sourcesInserted, duplicatesSkipped, pagesFetched, pagesFailed, claimsMatched, claimsCreated, claimFamilies }`. With `async: true` it answers `202 { searchRunId }` immediately and the run continues; poll `/web-search/:id/status`. Without `BRAVE_SEARCH_API_KEY` the run is stored as `FAILED` with a clear message |
 | `POST /ingestion/refresh` | none. Fetches every enabled feed now and waits for the run (or joins one in progress). Returns `{ totals, results[] }` |
 | `POST /claims` | `{ canonical_claim, category_id, status?, summary?, fingerprint?: { core_assertion, sentiment, emotional_hook, manipulation_marker, source_pattern, notes } }` |
 | `PUT /claims/:id` | any of `canonical_claim`, `category_id`, `status`, `summary` |
@@ -54,7 +56,8 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 ### Example
 
 ```bash
-curl "http://localhost:3000/api/search?q=Aakash%20Gupta%20VIT"
+curl -X POST http://localhost:3000/api/investigate-web -H "Content-Type: application/json" -d "{\"query\":\"city bans plastic bags\"}"
+curl "http://localhost:3000/api/claims?q=Aakash%20Gupta%20VIT"
 curl  http://localhost:3000/api/claims/1/mutations
 curl -X POST http://localhost:3000/api/ingestion/refresh
 ```

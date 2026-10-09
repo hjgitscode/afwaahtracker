@@ -1,4 +1,4 @@
-import { withConnection, query } from '../db/pool.js';
+import { withConnection } from '../db/pool.js';
 import { schedulerState } from '../ingestion/scheduler.js';
 import { lastRefreshByType } from './dashboardService.js';
 
@@ -34,32 +34,20 @@ export async function getIngestionStatus() {
          FROM dual`
     );
     const lastRefresh = await lastRefreshByType(db);
-    return { scheduler: schedulerState(), summary, lastRefresh, sources, recentRuns };
+    // New sources per day and feed type over the last two weeks
+    const activity = await db.rows(
+      `SELECT TO_CHAR(TRUNC(l.started_at), 'YYYY-MM-DD') AS day,
+              i.source_type,
+              SUM(l.records_fetched)  AS fetched,
+              SUM(l.records_inserted) AS inserted,
+              SUM(l.records_skipped)  AS skipped,
+              COUNT(*)                AS runs
+         FROM ingestion_log l
+         JOIN ingestion_sources i ON i.ingestion_source_id = l.ingestion_source_id
+        WHERE l.started_at >= TRUNC(SYSTIMESTAMP) - 13
+        GROUP BY TRUNC(l.started_at), i.source_type
+        ORDER BY day, i.source_type`
+    );
+    return { scheduler: schedulerState(), summary, lastRefresh, sources, recentRuns, activity };
   });
-}
-
-/** Latest automatically ingested sources with their matched claim. */
-export function getLiveFeed({ limit = 50, sourceType } = {}) {
-  const binds = { limit: Math.min(Math.max(Number(limit) || 50, 1), 200) };
-  let filter = '';
-  if (['GDELT', 'HACKER_NEWS', 'RSS'].includes(sourceType)) {
-    binds.source_type = sourceType;
-    filter = 'AND i.source_type = :source_type';
-  }
-  return query(
-    `SELECT s.source_id, s.publisher, s.author, s.source_title, s.source_url, s.linked_url,
-            s.published_at, s.fetched_at, s.engagement_count, s.source_status,
-            s.derived_from_source_id, p.platform_name, i.source_name AS feed_name, i.source_type,
-            v.claim_id, c.canonical_claim, c.status AS claim_status,
-            v.match_score, v.match_method, v.match_breakdown
-       FROM sources s
-       JOIN platforms p ON p.platform_id = s.platform_id
-       LEFT JOIN ingestion_sources i ON i.ingestion_source_id = s.ingestion_source_id
-       LEFT JOIN claim_variants v ON v.source_id = s.source_id
-       LEFT JOIN claims c ON c.claim_id = v.claim_id
-      WHERE s.origin_type = 'AUTOMATED' ${filter}
-      ORDER BY s.fetched_at DESC, s.source_id DESC
-      FETCH FIRST :limit ROWS ONLY`,
-    binds
-  );
 }
