@@ -44,13 +44,12 @@ const config = {
     candidateThreshold: int(process.env.MATCH_CANDIDATE_THRESHOLD, 55),
   },
   webSearch: {
+    provider: (process.env.WEB_SEARCH_PROVIDER || 'tavily').trim().toLowerCase(),
     // Read only on the server. Never sent to the browser.
-    braveApiKey: (process.env.BRAVE_SEARCH_API_KEY || '').trim(),
-    braveEndpoint: process.env.BRAVE_SEARCH_ENDPOINT || 'https://api.search.brave.com/res/v1/web/search',
-    // Brave returns at most 20 results per request; 2 pages = up to 40 results.
-    resultsPerPage: Math.min(20, Math.max(1, int(process.env.WEB_SEARCH_RESULTS_PER_PAGE, 20))),
-    pages: Math.min(3, Math.max(1, int(process.env.WEB_SEARCH_PAGES, 2))),
-    country: process.env.WEB_SEARCH_COUNTRY || '',
+    tavilyApiKey: (process.env.TAVILY_API_KEY || '').trim(),
+    tavilyEndpoint: process.env.TAVILY_SEARCH_ENDPOINT || 'https://api.tavily.com/search',
+    // One basic search per investigation; Tavily returns at most 20 results per request.
+    maxResults: Math.min(20, Math.max(1, int(process.env.WEB_SEARCH_MAX_RESULTS, 20))),
     fetchTimeoutMs: int(process.env.WEB_FETCH_TIMEOUT_MS, 9000),
     fetchMaxBytes: int(process.env.WEB_FETCH_MAX_BYTES, 1_500_000),
     fetchConcurrency: Math.min(6, Math.max(1, int(process.env.WEB_FETCH_CONCURRENCY, 5))),

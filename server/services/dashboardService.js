@@ -3,7 +3,7 @@
  * frontend only renders them.
  */
 import { withConnection } from '../db/pool.js';
-import { isWebSearchConfigured } from '../web-search/braveSearch.js';
+import { isWebSearchConfigured } from '../web-search/searchProvider.js';
 
 export async function getDashboard() {
   return withConnection(async (db) => {

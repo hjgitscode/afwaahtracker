@@ -37,7 +37,7 @@ router.get('/entities', h(meta.entities));
 router.get('/ingestion/status', h(ingestion.status));
 router.post('/ingestion/refresh', h(ingestion.refresh));
 
-// Live web investigation (Brave Search API; the key never leaves the server)
+// Live web investigation (web search provider key never leaves the server)
 router.post('/investigate-web', h(web.investigate));
 router.get('/web-search', h(web.list));
 router.get('/web-search/:runId/status', h(web.status));

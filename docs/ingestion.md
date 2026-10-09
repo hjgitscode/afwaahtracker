@@ -2,18 +2,19 @@
 
 AfwaahTracker collects sources in two modes that share one storage and matching path (`server/ingestion/sourceProcessor.js`):
 
-- **Live web investigation** (on demand, **INVESTIGATE WEB**): Brave Search API → public pages → rule-based analysis → Oracle.
+- **Live web investigation** (on demand, **INVESTIGATE WEB**): Tavily Search API → public pages → rule-based analysis → Oracle.
 - **Background monitoring** (scheduled, or **SYNC FEEDS** in the Database Lab): GDELT, Hacker News and RSS/Atom feeds.
 
 ## Live web investigation (`server/web-search/`)
 
 | Module | Role |
 |---|---|
-| `braveSearch.js` | Standard Brave Web Search endpoint with the `X-Subscription-Token` header. Up to 2 pages × 20 results, 1.1 s apart. Key read only from `server/.env` |
+| `searchProvider.js` | `searchWeb(query)`: the only entry point the pipeline uses; `WEB_SEARCH_PROVIDER` picks the adapter |
+| `tavilySearch.js` | Tavily Search API, `search_depth: basic`, one request per investigation, `max_results` from `WEB_SEARCH_MAX_RESULTS` (≤ 20). Maps results to `{ rank, title, url, snippet, domain, publisher (hostname), publishedAt (only if supplied), score, provider: 'TAVILY' }`. Key read only from `server/.env`; invalid key, rate/plan limits, timeouts and malformed responses become friendly messages |
 | `pageFetcher.js` | 5 concurrent fetches, 9 s timeout, 1.5 MB limit, HTML only, `robots.txt` honoured, redirects followed manually, private and loopback addresses refused. Failures never abort the run |
 | `pageExtractor.js` | cheerio: title (og:title › JSON-LD headline › h1 › title), publisher (og:site_name › JSON-LD publisher), author, published date (article:published_time › JSON-LD datePublished › meta date › `<time>`), canonical URL, main paragraphs. Missing → `NULL` |
 | `referenceExtractor.js` | Outbound links of the article body, normalised like stored URLs |
-| `webInvestigator.js` | Orchestrates one run and reports its stage for the progress panel |
+| `webInvestigator.js` | Orchestrates one run and reports its stage for the progress panel. The same query repeated within two minutes reuses the earlier run (no second search request) |
 
 Run steps: `START_WEB_SEARCH_RUN` → search → normalise URLs and drop in-batch duplicates → `FIND_SOURCE_ID` links already stored sources to the run → fetch and extract new pages (fallback: search title + snippet) → **one transaction per result** (`INGEST_SOURCE` with origin `WEB_SEARCH`, `RECORD_SEARCH_RESULT_LINK`, references, matching, `CHOOSE_VARIANT_PARENT`, `ADD_CLAIM_VARIANT`, `APPLY_SOURCE_DEPENDENCE`, entity/keyword links) → relationship pass for links between pages stored in the same run → `FINISH_WEB_SEARCH_RUN` (`SUCCESS`, `PARTIAL` when some pages failed, `FAILED` when the search itself failed).
 

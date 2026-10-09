@@ -44,7 +44,7 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 
 | Method & path | Body |
 |---|---|
-| `POST /investigate-web` | `{ query, async? }`. Creates a `WEB_SEARCH_RUNS` row, searches Brave, stores and analyses each result in its own transaction, then returns `{ searchRunId, query, status, resultsReceived, sourcesAnalysed, sourcesInserted, duplicatesSkipped, pagesFetched, pagesFailed, claimsMatched, claimsCreated, claimFamilies }`. With `async: true` it answers `202 { searchRunId }` immediately and the run continues; poll `/web-search/:id/status`. Without `BRAVE_SEARCH_API_KEY` the run is stored as `FAILED` with a clear message |
+| `POST /investigate-web` | `{ query, async? }`. Creates a `WEB_SEARCH_RUNS` row, searches the web (Tavily), stores and analyses each result in its own transaction, then returns `{ searchRunId, query, status, resultsReceived, sourcesAnalysed, sourcesInserted, duplicatesSkipped, pagesFetched, pagesFailed, claimsMatched, claimsCreated, claimFamilies }`. With `async: true` it answers `202 { searchRunId }` immediately and the run continues; poll `/web-search/:id/status`. Without `TAVILY_API_KEY` the run is stored as `FAILED` with a clear message |
 | `POST /ingestion/refresh` | none. Fetches every enabled feed now and waits for the run (or joins one in progress). Returns `{ totals, results[] }` |
 | `POST /claims` | `{ canonical_claim, category_id, status?, summary?, fingerprint?: { core_assertion, sentiment, emotional_hook, manipulation_marker, source_pattern, notes } }` |
 | `PUT /claims/:id` | any of `canonical_claim`, `category_id`, `status`, `summary` |

@@ -2,7 +2,7 @@
 
 **Trace the claim. Find the source. See what changed.**
 
-AfwaahTracker is a live claim investigation system built on Oracle Database. Type a claim, person, event or topic and press **INVESTIGATE WEB**. The server retrieves relevant publicly indexed sources through the Brave Search API, fetches the public pages, extracts their metadata, groups them into claim families with deterministic rules, stores everything in Oracle, and shows:
+AfwaahTracker is a live claim investigation system built on Oracle Database. Type a claim, person, event or topic and press **INVESTIGATE WEB**. The server retrieves relevant publicly indexed sources through the Tavily Search API, fetches the public pages, extracts their metadata, groups them into claim families with deterministic rules, stores everything in Oracle, and shows:
 
 - every source in publication order (the **earliest known source found**),
 - which sources explicitly link to earlier reporting (**known upstream links**),
@@ -14,7 +14,7 @@ AfwaahTracker is a live claim investigation system built on Oracle Database. Typ
 ```
 React + Vite (5173) ──REST──▶ Express (3000) ──node-oracledb pool──▶ Oracle Database Free (1521, Docker)
                                  │
-                                 ├── on demand: Brave Search API → public pages → rule-based matching
+                                 ├── on demand: Tavily Search API → public pages → rule-based matching
                                  └── background: node-cron feeds (GDELT · Hacker News · RSS/Atom)
 ```
 
@@ -42,10 +42,15 @@ You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container cre
    DB_PASSWORD=afwaah
    DB_CONNECT_STRING=localhost:1521/FREEPDB1
    ```
-   Then paste your Brave Search API key (from <https://brave.com/search/api/>, standard Web Search plan) after the `=`:
-   ```ini
-   BRAVE_SEARCH_API_KEY=your-key-here
-   ```
+   Then set up live web search:
+   1. Create a free account at <https://tavily.com>.
+   2. Copy your API key from the Tavily dashboard.
+   3. Paste it into `server\.env`:
+      ```ini
+      TAVILY_API_KEY=your_key_here
+      ```
+
+   Tavily currently offers a free API tier with a limited number of credits. AfwaahTracker uses one basic search request per investigation, and repeating the same query within two minutes reuses the earlier run instead of searching again.
    The key lives only in `server\.env`, which is git-ignored. Without a key the app still works with stored data and background feeds and shows *"Live web search unavailable — showing stored sources."*
 
 3. **Install packages** (first time only):
@@ -86,7 +91,7 @@ You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container cre
 ## How an investigation works
 
 1. **Oracle first.** Stored claim families that already match the query are shown alongside the new results.
-2. **Brave Search API** returns up to 40 results (2 × 20): title, URL, snippet, domain, rank. Google is not scraped, no browser automates a search engine, and nothing crawls the web.
+2. **Tavily Search API** (one basic request) returns up to 20 results: title, URL, snippet, relevance score and, when available, a publication date. Google is not scraped, no browser automates a search engine, and nothing crawls the web.
 3. **Normalise and deduplicate**: tracking parameters and fragments are removed; duplicates inside the batch and URLs already in `SOURCES` (URL, canonical URL or external id) are linked to the run instead of being stored twice.
 4. **Fetch public pages**: 5 at a time, 9 s timeout, 1.5 MB limit, HTML only, `robots.txt` honoured, private network addresses refused. A page that cannot be fetched falls back to the search title and snippet.
 5. **Extract** title, publisher, author, publication date, main text, canonical URL and outbound links. A field that cannot be found is stored as `NULL` and shown as *Not determined* — nothing is guessed.
@@ -113,9 +118,10 @@ A result whose headline states nothing specific (no action, quantity or certaint
 | `08_demo_queries.sql` | 37 commented read-only demonstration queries |
 | `09_ingestion_support.sql` | Feed registry and ingestion procedures |
 | `10_web_investigation.sql` | Live web investigation: `WEB_SEARCH_RUNS`, `SEARCH_RESULT_LINKS`, `SOURCE_REFERENCES`, nullable `published_at`, `canonical_url`, evidence-based lineage procedures, `VW_WEB_SEARCH_RUNS`, `VW_SOURCE_REFERENCES`. Safe to run again; it is also the migration for existing databases |
+| `11_tavily_provider.sql` | Tavily as the web search provider: `search_provider` defaults become `TAVILY`. Keeps all existing rows; safe to run again |
 | `install.sql` / `reset.sql` | Full install in order / drop everything |
 
-With SQL*Plus instead of npm: `sqlplus afwaah/afwaah@localhost:1521/FREEPDB1 @install.sql` (fresh) or `@10_web_investigation.sql` (upgrade), run from the `database` folder.
+With SQL*Plus instead of npm: `sqlplus afwaah/afwaah@localhost:1521/FREEPDB1 @install.sql` (fresh) or `@10_web_investigation.sql` then `@11_tavily_provider.sql` (upgrade), run from the `database` folder.
 
 ---
 
@@ -130,8 +136,9 @@ Feeds (two GDELT queries, Hacker News top stories and seven RSS/Atom feeds, conf
 | Variable | Default | Meaning |
 |---|---|---|
 | `DB_USER` / `DB_PASSWORD` / `DB_CONNECT_STRING` | `afwaah` / `afwaah` / `localhost:1521/FREEPDB1` | Oracle connection |
-| `BRAVE_SEARCH_API_KEY` | *(empty)* | Enables live web search. Server-side only |
-| `WEB_SEARCH_RESULTS_PER_PAGE` / `WEB_SEARCH_PAGES` | `20` / `2` | Up to 40 results per investigation |
+| `TAVILY_API_KEY` | *(empty)* | Enables live web search. Server-side only |
+| `WEB_SEARCH_PROVIDER` | `tavily` | Web search provider |
+| `WEB_SEARCH_MAX_RESULTS` | `20` | Results requested per investigation (max 20) |
 | `WEB_FETCH_TIMEOUT_MS` / `WEB_FETCH_MAX_BYTES` / `WEB_FETCH_CONCURRENCY` | `9000` / `1500000` / `5` | Page fetching limits |
 | `WEB_FETCH_RESPECT_ROBOTS` | `true` | Honour `robots.txt` |
 | `INGESTION_ENABLED` / `INGESTION_INTERVAL_MINUTES` / `INGESTION_RUN_ON_START` | `true` / `60` / `true` | Background feeds |
@@ -144,7 +151,7 @@ Feeds (two GDELT queries, Hacker News top stories and seven RSS/Atom feeds, conf
 
 | Symptom | Fix |
 |---|---|
-| **"Live web search unavailable — showing stored sources."** | `BRAVE_SEARCH_API_KEY` is empty, wrong or rate-limited. Check `server\.env` and restart `npm run dev`. |
+| **"Live web search unavailable — showing stored sources."** | `TAVILY_API_KEY` is empty or wrong, or the Tavily rate or plan limit was reached. Check `server\.env` and restart `npm run dev`. |
 | **"Oracle database disconnected"** | `docker start afwaah-oracle`, wait for *DATABASE IS READY TO USE!*, check `DB_CONNECT_STRING`. |
 | `ORA-00942` table or view does not exist | The database predates live web investigation: run `npm run db:migrate`. |
 | `ORA-01017` invalid username/password | `DB_USER` / `DB_PASSWORD` in `server\.env` do not match the database user. |

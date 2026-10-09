@@ -2,7 +2,7 @@ import { getDashboard } from '../services/dashboardService.js';
 import { listPlatforms, listCategories, listEntities } from '../services/metaService.js';
 import { getLabOverview, runExampleQuery } from '../services/labService.js';
 import { poolStatus, queryOne } from '../db/pool.js';
-import { isWebSearchConfigured } from '../web-search/braveSearch.js';
+import { isWebSearchConfigured } from '../web-search/searchProvider.js';
 
 export const dashboard = async (req, res) => res.json(await getDashboard());
 export const platforms = async (req, res) => res.json(await listPlatforms());

@@ -1,8 +1,8 @@
 /**
  * Upgrades an EXISTING AfwaahTracker database to the current schema without
- * deleting any data. Runs database/10_web_investigation.sql, which only adds
- * what is missing and re-links automatically created claim lineage using the
- * evidence-based rules.
+ * deleting any data. Runs database/10_web_investigation.sql (adds what is
+ * missing and re-links automatic claim lineage with the evidence-based rules)
+ * and 11_tavily_provider.sql (Tavily as the web search provider).
  *
  * Usage:  npm run db:migrate            (from the server folder or the root)
  */
@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect, runFiles } from './installDb.js';
 
-const MIGRATIONS = ['10_web_investigation.sql'];
+const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql'];
 
 async function main() {
   const conn = await connect();

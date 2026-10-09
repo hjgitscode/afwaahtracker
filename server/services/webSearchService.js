@@ -6,7 +6,7 @@
 import { query, queryOne } from '../db/pool.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { investigateWeb, getProgress, STAGES } from '../web-search/webInvestigator.js';
-import { isWebSearchConfigured } from '../web-search/braveSearch.js';
+import { isWebSearchConfigured } from '../web-search/searchProvider.js';
 import { listClaims } from './claimService.js';
 import { listSources } from './sourceService.js';
 
@@ -47,8 +47,34 @@ async function countFamilies(runId) {
  * Synchronous mode returns the finished summary. Async mode returns as soon
  * as the run row exists so the browser can poll /web-search/:id/status.
  */
+// The same query investigated this recently reuses that run instead of
+// spending another search request (failed runs are never reused).
+const REUSE_WINDOW_SECONDS = 120;
+
+async function recentRun(text) {
+  const q = text.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (q.length < 2) return null;
+  return queryOne(
+    `SELECT search_run_id, status FROM web_search_runs
+      WHERE LOWER(query_text) = :q
+        AND status <> 'FAILED'
+        AND started_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:secs, 'SECOND')
+      ORDER BY started_at DESC
+      FETCH FIRST 1 ROWS ONLY`,
+    { q: q.slice(0, 400), secs: REUSE_WINDOW_SECONDS }
+  );
+}
+
 export async function startInvestigation(body = {}) {
   const text = String(body.query ?? body.q ?? '');
+  const reused = await recentRun(text);
+  if (reused) {
+    if (body.async) {
+      return { searchRunId: reused.search_run_id, status: reused.status, query: text.trim(), webSearchAvailable: isWebSearchConfigured(), reused: true };
+    }
+    const st = await getRunStatus(reused.search_run_id);
+    return { ...summarise({ searchRunId: reused.search_run_id, query: st.query, status: st.status, error: st.error, referencesFound: null, ...st.counts }, st.counts?.claimFamilies ?? 0), reused: true };
+  }
   if (body.async) {
     return new Promise((resolve, reject) => {
       let started = false;

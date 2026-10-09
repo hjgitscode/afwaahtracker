@@ -2,7 +2,7 @@
  * Live web investigation (on-demand "INVESTIGATE WEB").
  *
  *   1. START_WEB_SEARCH_RUN                                   (COMMIT)
- *   2. Brave Search API -> publicly indexed results (title, URL, snippet, rank)
+ *   2. web search provider (Tavily) -> one request -> publicly indexed results
  *   3. normalise URLs, drop duplicates inside the batch
  *   4. duplicates already in Oracle are linked to the run, not re-stored
  *   5. fetch new public pages (bounded concurrency, timeout, size limit);
@@ -13,7 +13,7 @@
  *   8. relationship pass: links between pages stored in the same run
  *   9. FINISH_WEB_SEARCH_RUN with the counts                  (COMMIT)
  *
- * Without BRAVE_SEARCH_API_KEY the run is recorded as FAILED with a clear
+ * Without TAVILY_API_KEY the run is recorded as FAILED with a clear
  * message, and the caller still shows the sources stored in Oracle.
  */
 import { withConnection, withTransaction, oracledb } from '../db/pool.js';
@@ -23,7 +23,7 @@ import { mapLimit } from '../ingestion/http.js';
 import { normaliseUrl, makeItem, domainOf, cleanText } from '../ingestion/normalizer.js';
 import { loadDictionary } from '../ingestion/entityMatcher.js';
 import { processSourceItem, recordReferences, refreshLineage } from '../ingestion/sourceProcessor.js';
-import { braveWebSearch, isWebSearchConfigured, WebSearchUnavailableError } from './braveSearch.js';
+import { searchWeb, providerName, isWebSearchConfigured, WebSearchUnavailableError } from './searchProvider.js';
 import { fetchPage } from './pageFetcher.js';
 import { extractPage } from './pageExtractor.js';
 
@@ -75,7 +75,8 @@ export function platformNameFor(url, page) {
 
 async function startRun(query) {
   return withTransaction(async (db) => {
-    const r = await db.exec(`BEGIN :id := start_web_search_run(:q, 'BRAVE'); END;`, {
+    const r = await db.exec(`BEGIN :id := start_web_search_run(:q, :provider); END;`, {
+      provider: providerName(),
       id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
       q: query,
     });
@@ -106,8 +107,8 @@ async function finishRun(runId, c, status, error) {
 
 async function linkResult(db, runId, sourceId, result, duplicate) {
   await db.exec(
-    `BEGIN record_search_result_link(:run, :src, :rank, 'BRAVE', :snippet, :dup); END;`,
-    { run: runId, src: sourceId, rank: result.rank, snippet: result.snippet, dup: duplicate ? 'Y' : 'N' }
+    `BEGIN record_search_result_link(:run, :src, :rank, :provider, :snippet, :dup); END;`,
+    { provider: result.provider || providerName(), run: runId, src: sourceId, rank: result.rank, snippet: result.snippet, dup: duplicate ? 'Y' : 'N' }
   );
 }
 
@@ -119,7 +120,7 @@ function buildItem(result, page) {
     url: result.url,
     publisher: page?.publisher || result.publisher || result.domain,
     author: page?.author || null,
-    publishedAt: page?.publishedAt || result.pageAge || null,
+    publishedAt: page?.publishedAt || result.publishedAt || null,
     snippet: page?.text || page?.description || result.snippet,
     unknownDate: 'null',
   });
@@ -159,7 +160,7 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
   try {
     // 2. Search
     setStage(state, 'SEARCHING');
-    const results = await braveWebSearch(query);
+    const results = await searchWeb(query);
     counts.resultsReceived = results.length;
 
     // 3. Normalise + in-batch duplicates

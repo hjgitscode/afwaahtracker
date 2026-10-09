@@ -11,7 +11,7 @@ AfwaahTracker is a three-tier application with Oracle at its centre. React displ
                                               └──────────────┬──────────────┘
                                                              │ HTTPS
                                   ┌──────────────────────────┴──────────────────────────┐
-                                  │ on demand: Brave Search API → public pages           │
+                                  │ on demand: Tavily Search API → public pages          │
                                   │ background: GDELT · Hacker News · RSS/Atom           │
                                   └──────────────────────────────────────────────────────┘
 ```
@@ -19,7 +19,7 @@ AfwaahTracker is a three-tier application with Oracle at its centre. React displ
 ## Principles
 
 - **The database does the work.** Echo Ratio, aggregates, lineage (hierarchical `CONNECT BY` queries), deduplication (unique indexes plus `INGEST_SOURCE`) and the Mutation Ledger (`GENERATE_MUTATION_LEDGER`, called by a compound trigger) all run in Oracle. React only renders the results.
-- **No direct database access from the browser.** In development Vite proxies `/api` to Express. Oracle credentials and `BRAVE_SEARCH_API_KEY` live only in `server/.env`.
+- **No direct database access from the browser.** In development Vite proxies `/api` to Express. Oracle credentials and `TAVILY_API_KEY` live only in `server/.env`.
 - **Bind variables everywhere.** Dynamic `WHERE` clauses are assembled only from fixed, server-defined fragments, and all values are bound.
 - **Connection pooling.** `server/db/pool.js` creates one `oracledb` pool. `withTransaction()` commits on success and rolls back on any error.
 - **No runtime AI.** Entity recognition, keyword detection, certainty and action detection and claim matching are dictionary and rule based.
@@ -39,7 +39,8 @@ afwaah-tracker/
 │  ├─ routes/           REST route table
 │  ├─ controllers/      HTTP layer
 │  ├─ services/         SQL for claims, sources, overview, web search, ingestion, lab
-│  ├─ web-search/       braveSearch.js · webInvestigator.js · pageFetcher.js ·
+│  ├─ web-search/       searchProvider.js · tavilySearch.js · webInvestigator.js ·
+│  │                    pageFetcher.js ·
 │  │                    pageExtractor.js · referenceExtractor.js
 │  ├─ ingestion/        gdelt.js · hackerNews.js · rss.js · normalizer.js ·
 │  │                    entityMatcher.js · matcher.js · sourceProcessor.js (shared by

@@ -16,6 +16,7 @@
 --   09         ingestion support + ingestion source registry
 --   04         views
 --   10         live web investigation (also usable as a migration)
+--   11         Tavily as the web search provider (also usable as a migration)
 --------------------------------------------------------------------------------
 SET ECHO OFF
 SET VERIFY OFF
@@ -37,6 +38,7 @@ PROMPT ============================================================
 @@09_ingestion_support.sql
 @@04_views.sql
 @@10_web_investigation.sql
+@@11_tavily_provider.sql
 
 PROMPT Recompiling dependent objects ...
 BEGIN

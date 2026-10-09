@@ -58,7 +58,7 @@ async function request(path, { method = 'GET', body, params, signal } = {}) {
 
 export const api = {
   overview: (opts) => request('/overview', opts),
-  // Live web investigation: the Brave key never reaches the browser
+  // Live web investigation: the search API key never reaches the browser
   investigateWeb: (query) => request('/investigate-web', { method: 'POST', body: { query, async: true } }),
   webSearchStatus: (id, opts) => request(`/web-search/${id}/status`, opts),
   webSearchResults: (id, opts) => request(`/web-search/${id}/results`, opts),
