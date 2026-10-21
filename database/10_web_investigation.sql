@@ -44,24 +44,46 @@ EXCEPTION
 END afw_ddl;
 /
 
+-- Helper: replace a CHECK constraint only when it does not yet allow p_needed.
+-- Later migrations widen these lists; re-running an earlier migration must
+-- never narrow them again.
+CREATE OR REPLACE PROCEDURE afw_swap_check (
+    p_table      IN VARCHAR2,
+    p_constraint IN VARCHAR2,
+    p_needed     IN VARCHAR2,
+    p_condition  IN VARCHAR2
+)
+AUTHID CURRENT_USER
+IS
+    v_found NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_found
+      FROM user_constraints
+     WHERE constraint_name = UPPER(p_constraint)
+       AND table_name = UPPER(p_table)
+       AND INSTR(search_condition_vc, '''' || p_needed || '''') > 0;
+    IF v_found = 0 THEN
+        afw_ddl('ALTER TABLE ' || p_table || ' DROP CONSTRAINT ' || p_constraint);
+        afw_ddl('ALTER TABLE ' || p_table || ' ADD CONSTRAINT ' || p_constraint || ' CHECK (' || p_condition || ')');
+    END IF;
+END afw_swap_check;
+/
+
 BEGIN
     ------------------------------------------------------------------ SOURCES
     afw_ddl('ALTER TABLE sources MODIFY (published_at NULL)');
     afw_ddl('ALTER TABLE sources ADD (canonical_url VARCHAR2(1000))');
 
-    afw_ddl('ALTER TABLE sources DROP CONSTRAINT ck_sources_origin');
-    afw_ddl('ALTER TABLE sources ADD CONSTRAINT ck_sources_origin
-                 CHECK (origin_type IN (''DEMO'',''AUTOMATED'',''WEB_SEARCH'',''MANUAL''))');
+    afw_swap_check('sources', 'ck_sources_origin', 'WEB_SEARCH',
+        'origin_type IN (''DEMO'',''AUTOMATED'',''WEB_SEARCH'',''MANUAL'')');
 
-    afw_ddl('ALTER TABLE platforms DROP CONSTRAINT ck_platforms_type');
-    afw_ddl('ALTER TABLE platforms ADD CONSTRAINT ck_platforms_type
-                 CHECK (platform_type IN (''NEWS'',''FORUM'',''SOCIAL'',''BLOG'',''MESSAGING'',
-                                          ''VIDEO'',''OFFICIAL'',''AGGREGATOR'',''WEB''))');
+    afw_swap_check('platforms', 'ck_platforms_type', 'WEB',
+        'platform_type IN (''NEWS'',''FORUM'',''SOCIAL'',''BLOG'',''MESSAGING'',
+                                          ''VIDEO'',''OFFICIAL'',''AGGREGATOR'',''WEB'')');
 
-    afw_ddl('ALTER TABLE claim_variants DROP CONSTRAINT ck_variants_lineage_basis');
-    afw_ddl('ALTER TABLE claim_variants ADD CONSTRAINT ck_variants_lineage_basis
-                 CHECK (lineage_basis IN (''CURATED'',''MANUAL'',''EXPLICIT_REFERENCE'',
-                                          ''LEXICAL_PREDECESSOR'',''NONE'',''AUTO_ROOT''))');
+    afw_swap_check('claim_variants', 'ck_variants_lineage_basis', 'EXPLICIT_REFERENCE',
+        'lineage_basis IN (''CURATED'',''MANUAL'',''EXPLICIT_REFERENCE'',
+                                          ''LEXICAL_PREDECESSOR'',''NONE'',''AUTO_ROOT'')');
 
     ------------------------------------------------------------------ WEB_SEARCH_RUNS
     -- One row per on-demand "INVESTIGATE WEB" request.
@@ -128,8 +150,8 @@ BEGIN
                  FOREIGN KEY (to_source_id) REFERENCES sources (source_id) ON DELETE CASCADE');
     afw_ddl('ALTER TABLE source_references ADD CONSTRAINT uq_references_pair
                  UNIQUE (from_source_id, to_source_id, reference_type)');
-    afw_ddl('ALTER TABLE source_references ADD CONSTRAINT ck_references_type
-                 CHECK (reference_type IN (''HYPERLINK'',''SUBMITTED_LINK'',''CANONICAL_REFERENCE'',''MANUAL''))');
+    afw_swap_check('source_references', 'ck_references_type', 'HYPERLINK',
+        'reference_type IN (''HYPERLINK'',''SUBMITTED_LINK'',''CANONICAL_REFERENCE'',''MANUAL'')');
     afw_ddl('ALTER TABLE source_references ADD CONSTRAINT ck_references_not_self
                  CHECK (from_source_id <> to_source_id)');
 

@@ -77,9 +77,9 @@ export async function runSource(source) {
         if (res.status === 'SKIPPED') counts.skipped += 1;
         else {
           counts.inserted += 1;
-          if (res.claimId && !res.newClaim) counts.matched += 1;
-          // keywords of a newly created claim must be visible to the next items
-          if (res.newClaim) dictionary = await withConnection((db) => loadDictionary(db, { force: true }));
+          if (res.claims.some((c) => !c.newClaim)) counts.matched += 1;
+          // entities/keywords of a newly created claim must be visible to the next items
+          if (res.claims.some((c) => c.newClaim)) dictionary = await withConnection((db) => loadDictionary(db, { force: true }));
         }
       } catch (err) {
         counts.errors += 1;

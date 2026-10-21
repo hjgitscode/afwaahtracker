@@ -9,37 +9,94 @@ import { NotFoundError } from '../middleware/errors.js';
 const TABLES = ['PLATFORMS', 'CATEGORIES', 'INGESTION_SOURCES', 'INGESTION_LOG', 'SOURCES', 'CLAIMS',
   'CLAIM_VARIANTS', 'ENTITIES', 'ENTITY_ALIASES', 'CLAIM_ENTITIES', 'ENTITY_CANDIDATES', 'KEYWORDS',
   'CLAIM_KEYWORDS', 'FINGERPRINTS', 'CLAIM_MUTATIONS', 'AUDIT_LOG', 'WEB_SEARCH_RUNS',
-  'SEARCH_RESULT_LINKS', 'SOURCE_REFERENCES'];
+  'SEARCH_RESULT_LINKS', 'SOURCE_REFERENCES', 'SOURCE_EVIDENCE', 'CLAIM_PROPOSITIONS', 'SEARCH_CLAIM_MATCHES'];
 
+// Live data first (DEMO rows sort last), so each example shows what the
+// latest investigations actually produced.
 export const EXAMPLE_QUERIES = [
+  {
+    key: 'claim-evidence-join',
+    title: 'Claims, their sources and the exact evidence',
+    concept: 'INNER JOIN + LEFT JOIN across four tables',
+    sql: `SELECT c.claim_id, c.canonical_claim, s.publisher,
+       e.sentence_text AS evidence, e.extraction_method
+  FROM claims c
+  JOIN claim_variants v       ON v.claim_id = c.claim_id
+  JOIN sources s              ON s.source_id = v.source_id
+  LEFT JOIN source_evidence e ON e.evidence_id = v.evidence_id
+ ORDER BY CASE c.claim_origin WHEN 'DEMO' THEN 1 ELSE 0 END,
+          c.claim_id DESC, s.published_at NULLS LAST
+ FETCH FIRST 12 ROWS ONLY`,
+  },
+  {
+    key: 'source-counts',
+    title: 'Claim families repeated by two or more sources',
+    concept: 'GROUP BY + COUNT(DISTINCT) + HAVING',
+    sql: `SELECT c.claim_id, c.canonical_claim,
+       COUNT(DISTINCT v.source_id)  AS sources,
+       COUNT(DISTINCT s.platform_id) AS platforms,
+       COUNT(DISTINCT v.evidence_id) AS evidence
+  FROM claims c
+  JOIN claim_variants v ON v.claim_id = c.claim_id
+  JOIN sources s        ON s.source_id = v.source_id
+ GROUP BY c.claim_id, c.canonical_claim
+HAVING COUNT(DISTINCT v.source_id) >= 2
+ ORDER BY sources DESC, c.claim_id DESC
+ FETCH FIRST 10 ROWS ONLY`,
+  },
+  {
+    key: 'chronology',
+    title: 'Earliest and latest known source per claim family',
+    concept: 'MIN / MAX aggregates',
+    sql: `SELECT c.claim_id, c.canonical_claim,
+       TO_CHAR(MIN(s.published_at), 'YYYY-MM-DD') AS earliest_known,
+       TO_CHAR(MAX(s.published_at), 'YYYY-MM-DD') AS latest_known,
+       SUM(CASE WHEN s.published_at IS NULL THEN 1 ELSE 0 END) AS undated
+  FROM claims c
+  JOIN claim_variants v ON v.claim_id = c.claim_id
+  JOIN sources s        ON s.source_id = v.source_id
+ GROUP BY c.claim_id, c.canonical_claim
+ ORDER BY MAX(s.published_at) DESC NULLS LAST
+ FETCH FIRST 10 ROWS ONLY`,
+  },
   {
     key: 'echo-ratio',
     title: 'Known Echo Ratio per claim family',
     concept: 'View + PL/SQL function',
-    sql: `SELECT claim_id, canonical_claim, number_of_sources,
-       number_of_derived_sources, echo_ratio,
+    sql: `SELECT claim_id, canonical_claim, source_count,
+       known_upstream_count, known_echo_ratio,
        calculate_echo_ratio(claim_id) AS echo_plsql
-  FROM vw_claim_overview
- WHERE number_of_sources > 0
- ORDER BY echo_ratio DESC, number_of_sources DESC
- FETCH FIRST 8 ROWS ONLY`,
+  FROM vw_claim_investigation
+ WHERE source_count > 0
+ ORDER BY CASE claim_origin WHEN 'DEMO' THEN 1 ELSE 0 END,
+          known_echo_ratio DESC, source_count DESC
+ FETCH FIRST 10 ROWS ONLY`,
   },
   {
-    key: 'web-search-runs',
-    title: 'Latest live web searches and what they stored',
-    concept: 'View over WEB_SEARCH_RUNS + SEARCH_RESULT_LINKS',
-    sql: `SELECT search_run_id, query_text, status, results_received,
-       sources_inserted, duplicates_skipped, pages_failed, claim_families
-  FROM vw_web_search_runs
- ORDER BY started_at DESC
- FETCH FIRST 8 ROWS ONLY`,
+    key: 'claim-lineage',
+    title: 'Claim lineage of the most connected family',
+    concept: 'Hierarchical query (CONNECT BY) on a self-referencing FK',
+    sql: `SELECT LPAD(' ', (LEVEL - 1) * 2) || s.publisher AS lineage,
+       v.lineage_basis, v.certainty, LEVEL AS depth
+  FROM claim_variants v
+  JOIN sources s ON s.source_id = v.source_id
+ WHERE v.claim_id = (SELECT claim_id FROM claim_variants
+                      WHERE parent_variant_id IS NOT NULL
+                      GROUP BY claim_id
+                      ORDER BY COUNT(*) DESC, claim_id DESC
+                      FETCH FIRST 1 ROWS ONLY)
+ START WITH v.parent_variant_id IS NULL
+CONNECT BY PRIOR v.variant_id = v.parent_variant_id
+ ORDER SIBLINGS BY s.published_at`,
   },
   {
-    key: 'source-references',
-    title: 'Explicit references between stored sources',
+    key: 'source-lineage',
+    title: 'Source provenance: explicit references',
     concept: 'Self-join of SOURCES through SOURCE_REFERENCES',
-    sql: `SELECT r.reference_type, f.publisher AS from_source,
-       t.publisher AS to_source, r.confidence_basis
+    sql: `SELECT f.publisher AS source, r.reference_type,
+       t.publisher AS refers_to,
+       CASE WHEN f.derived_from_source_id = t.source_id
+            THEN 'KNOWN DERIVED' ELSE '-' END AS dependency
   FROM source_references r
   JOIN sources f ON f.source_id = r.from_source_id
   JOIN sources t ON t.source_id = r.to_source_id
@@ -48,61 +105,31 @@ export const EXAMPLE_QUERIES = [
   },
   {
     key: 'mutation-ledger',
-    title: 'Mutation Ledger for the flagship demo claim',
-    concept: 'Multi-table JOIN (mutation -> variants -> sources)',
+    title: 'Mutation Ledger of the latest family with changes',
+    concept: 'Trigger-generated rows + multi-table JOIN',
     sql: `SELECT ps.publisher AS from_source, cs.publisher AS to_source,
-       m.changed_component, m.old_value, m.new_value
+       m.changed_component, m.old_value, m.new_value, m.is_escalation
   FROM claim_mutations m
   JOIN claim_variants pv ON pv.variant_id = m.parent_variant_id
   JOIN claim_variants cv ON cv.variant_id = m.child_variant_id
   JOIN sources ps ON ps.source_id = pv.source_id
   JOIN sources cs ON cs.source_id = cv.source_id
- WHERE m.claim_id = 1
+ WHERE m.claim_id = (SELECT MAX(claim_id) FROM claim_mutations)
  ORDER BY m.child_variant_id, m.mutation_id`,
   },
   {
-    key: 'source-lineage',
-    title: 'Source lineage as a hierarchy',
-    concept: 'Hierarchical query (CONNECT BY) on a self-referencing FK',
-    sql: `SELECT LPAD(' ', (LEVEL - 1) * 2) || publisher AS lineage,
-       LEVEL AS depth, SYS_CONNECT_BY_PATH(source_id, '>') AS path
-  FROM sources
- START WITH source_id = 20
-CONNECT BY PRIOR source_id = derived_from_source_id`,
-  },
-  {
-    key: 'lineage-basis',
-    title: 'How wording parents were chosen',
-    concept: 'GROUP BY + CASE',
-    sql: `SELECT lineage_basis,
-       COUNT(*) AS variants,
-       SUM(CASE WHEN parent_variant_id IS NULL THEN 1 ELSE 0 END) AS without_parent
-  FROM claim_variants
- GROUP BY lineage_basis
- ORDER BY variants DESC`,
-  },
-  {
-    key: 'retrieval-methods',
-    title: 'Sources by retrieval method and platform',
-    concept: 'GROUP BY + HAVING + JOIN',
-    sql: `SELECT s.origin_type AS retrieval_method, p.platform_name,
-       COUNT(*) AS sources,
-       SUM(CASE WHEN s.published_at IS NULL THEN 1 ELSE 0 END) AS undated
-  FROM sources s
-  JOIN platforms p ON p.platform_id = s.platform_id
- GROUP BY s.origin_type, p.platform_name
-HAVING COUNT(*) > 0
- ORDER BY sources DESC`,
-  },
-  {
-    key: 'audit-trail',
-    title: 'Latest audit trail entries',
-    concept: 'Rows written by AFTER INSERT/UPDATE/DELETE triggers',
-    sql: `SELECT table_name, operation, record_id,
-       TO_CHAR(changed_at, 'YYYY-MM-DD HH24:MI') AS changed_at, details
-  FROM audit_log
- ORDER BY audit_id DESC
- FETCH FIRST 8 ROWS ONLY`,
+    key: 'search-matches',
+    title: 'What each investigation found',
+    concept: 'M:N tables SEARCH_CLAIM_MATCHES and SEARCH_RESULT_LINKS + subquery',
+    sql: `SELECT r.query_text, r.query_type, m.relationship_to_query,
+       c.canonical_claim, m.evidence_count,
+       (SELECT COUNT(*) FROM search_result_links l
+         WHERE l.search_run_id = r.search_run_id) AS sources_retrieved
+  FROM web_search_runs r
+  JOIN search_claim_matches m ON m.search_run_id = r.search_run_id
+  JOIN claims c               ON c.claim_id = m.claim_id
+ ORDER BY r.search_run_id DESC, m.match_score DESC
+ FETCH FIRST 12 ROWS ONLY`,
   },
 ];
 
@@ -141,7 +168,7 @@ export async function getLabOverview() {
       `SELECT object_name, object_type, status
          FROM user_objects
         WHERE object_type IN ('PROCEDURE', 'FUNCTION', 'TRIGGER')
-          AND object_name <> 'AFW_DDL'
+          AND object_name NOT IN ('AFW_DDL', 'AFW_SWAP_CHECK')
         ORDER BY object_type, object_name`
     );
     const views = await db.rows(`SELECT view_name FROM user_views ORDER BY view_name`);

@@ -128,7 +128,10 @@ export function makeItem({ externalId, title, url, linkedUrl, publisher, author,
     author: author ? cleanText(author, 200) : null,
     // A publication time in the future is clamped to "now"
     publishedAt: published && published > new Date() ? new Date() : published,
-    snippet: snippet ? cleanText(snippet, 3900) : null,
+    // Page text keeps one block per line (re-read by later investigations)
+    snippet: snippet
+      ? String(snippet).split('\n').map((l) => cleanText(l, 1200)).filter(Boolean).join('\n').slice(0, 3900) || null
+      : null,
     engagement: Number.isFinite(Number(engagement)) ? Math.max(0, Math.round(Number(engagement))) : 0,
   };
 }

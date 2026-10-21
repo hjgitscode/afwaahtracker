@@ -17,6 +17,7 @@
 --   04         views
 --   10         live web investigation (also usable as a migration)
 --   11         Tavily as the web search provider (also usable as a migration)
+--   12         claim intelligence: evidence, propositions, search-claim matches
 --------------------------------------------------------------------------------
 SET ECHO OFF
 SET VERIFY OFF
@@ -39,6 +40,7 @@ PROMPT ============================================================
 @@04_views.sql
 @@10_web_investigation.sql
 @@11_tavily_provider.sql
+@@12_claim_intelligence.sql
 
 PROMPT Recompiling dependent objects ...
 BEGIN

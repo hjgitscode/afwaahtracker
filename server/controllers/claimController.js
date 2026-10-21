@@ -11,6 +11,9 @@ export const list = async (req, res) => res.json(await claims.listClaims(req.que
 export const search = async (req, res) => res.json(await claims.listClaims({ ...req.query, q: req.query.q || '' }));
 export const get = async (req, res) => res.json(await claims.getClaim(parseId(req.params.id)));
 export const sources = async (req, res) => res.json(await claims.getClaimSources(parseId(req.params.id)));
+export const evidence = async (req, res) => res.json(await claims.getClaimEvidence(parseId(req.params.id)));
+export const investigation = async (req, res) =>
+  res.json(await claims.getClaimInvestigation(parseId(req.params.id), parseId(req.query.run)));
 export const variants = async (req, res) => res.json(await claims.getClaimVariants(parseId(req.params.id)));
 export const mutations = async (req, res) => res.json(await claims.getClaimMutations(parseId(req.params.id)));
 export const claimLineage = async (req, res) => res.json(await claims.getClaimLineage(parseId(req.params.id)));

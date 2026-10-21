@@ -7,6 +7,7 @@ import { formatDate, truncate } from '../../utils/format.js';
 const COMPONENT_LABEL = {
   ACTOR: 'Actor', ACTION: 'Action', TARGET: 'Target', LOCATION: 'Location', EVENT: 'Event',
   DATE: 'Date', QUANTITY: 'Quantity', CERTAINTY: 'Certainty', ATTRIBUTION: 'Attribution',
+  SUBJECT: 'Subject', PREDICATE: 'Relationship', ROLE: 'Role', OBJECT: 'Object', ORGANISATION: 'Organisation',
 };
 
 /** Groups ledger rows by parent -> child transition. */

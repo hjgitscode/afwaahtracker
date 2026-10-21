@@ -2,7 +2,7 @@
 
 All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `database/install.sql` runs them in dependency order.
 
-## Tables (19)
+## Tables (22)
 
 | Table | Purpose | Key relationships |
 |---|---|---|
@@ -24,7 +24,12 @@ All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `dat
 | `AUDIT_LOG` | Trigger-written audit trail | |
 | `WEB_SEARCH_RUNS` | One row per live web investigation, with its counts and status | |
 | `SEARCH_RESULT_LINKS` | M:N search runs ↔ sources, with rank, provider, snippet | composite PK, FK run and source (CASCADE) |
-| `SOURCE_REFERENCES` | Explicit evidence that one stored source points at another | FK from/to source; UNIQUE (from, to, type) |
+| `SOURCE_REFERENCES` | Explicit evidence that one stored source points at another (`HYPERLINK`, `SUBMITTED_LINK`, `CANONICAL_REFERENCE`, `ATTRIBUTION`, `MANUAL`) | FK from/to source; UNIQUE (from, to, type) |
+| `SOURCE_EVIDENCE` | The 1–3 sentences of a source that state something about the investigated claim (`PAGE_SENTENCE` › `META_DESCRIPTION` › `SEARCH_SNIPPET` › `TITLE_FALLBACK`) | FK source, search run; UNIQUE (source, sentence hash) |
+| `CLAIM_PROPOSITIONS` | Structured proposition of a claim family: subject · predicate · object · qualifier · temporal scope | PK/FK claim; FK subject/object/qualifier entity; UNIQUE `normalized_signature` |
+| `SEARCH_CLAIM_MATCHES` | M:N search runs ↔ claim families: `EXACT`, `DIFFERENT_VALUE`, `RELATED`, `TOPICAL`, with evidence and source counts | composite PK, FK run and claim |
+
+`CLAIM_VARIANTS` also carries `evidence_id` (FK `SOURCE_EVIDENCE`), `relation_subject / predicate / object / qualifier` and `extraction_basis`; `WEB_SEARCH_RUNS` stores the parsed query hypothesis (`query_type`, `hypothesis_*`). Signature: `SUBJECT_KEY|PREDICATE|OBJECT_KEY|QUALIFIER_KEY|TEMPORAL`, where entity keys are `E<entity_id>` and a role is its code (`VICE_PRESIDENT`), so *Director* and *Vice President* never collide.
 
 `SOURCES.published_at` is nullable: an unknown publication date is stored as `NULL`, never guessed. `SOURCES.canonical_url` holds a page's canonical URL when it differs. `origin_type` is `DEMO`, `AUTOMATED` (feeds), `WEB_SEARCH` or `MANUAL`.
 

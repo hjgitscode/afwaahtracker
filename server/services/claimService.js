@@ -154,6 +154,7 @@ export async function listClaims(params = {}) {
               WHERE p.platform_id IN (SELECT s.platform_id FROM claim_variants v
                                         JOIN sources s ON s.source_id = v.source_id
                                        WHERE v.claim_id = o.claim_id)) AS platforms,
+            (SELECT ci.evidence_count FROM vw_claim_investigation ci WHERE ci.claim_id = o.claim_id) AS evidence_count,
             ${toInt(params.run) ? `(SELECT COUNT(DISTINCT l.source_id) FROM search_result_links l
                 JOIN claim_variants v ON v.source_id = l.source_id
                WHERE v.claim_id = o.claim_id AND l.search_run_id = :run_id)` : 'NULL'} AS run_sources,
@@ -180,6 +181,9 @@ export async function getClaim(id) {
   return withConnection(async (db) => {
     const claim = await db.one(
       `SELECT o.*, c.summary,
+              ci.claim_type, ci.subject, ci.predicate, ci.object, ci.qualifier, ci.temporal_scope,
+              ci.normalized_signature, ci.evidence_count, ci.known_upstream_count, ci.known_echo_ratio,
+              ci.mutation_count, ci.variant_count,
               calculate_echo_ratio(o.claim_id) AS echo_ratio_plsql,
               (SELECT COUNT(*) FROM source_references r
                 WHERE r.from_source_id IN (SELECT source_id FROM claim_variants WHERE claim_id = o.claim_id)
@@ -188,6 +192,7 @@ export async function getClaim(id) {
                 WHERE v.claim_id = o.claim_id AND s.published_at IS NULL) AS undated_sources
          FROM vw_claim_overview o
          JOIN claims c ON c.claim_id = o.claim_id
+         JOIN vw_claim_investigation ci ON ci.claim_id = o.claim_id
         WHERE o.claim_id = :id`,
       { id }
     );
@@ -244,6 +249,41 @@ export async function getClaimSources(id) {
       ORDER BY cs.published_at NULLS LAST, cs.variant_id`,
     { id }
   );
+}
+
+/** Evidence table: exact sentences per source (VW_CLAIM_EVIDENCE), chronological. */
+export async function getClaimEvidence(id) {
+  await assertClaim(id);
+  return query(
+    `SELECT e.*,
+            CASE WHEN e.published_at IS NOT NULL
+                  AND e.published_at = MIN(e.published_at) OVER () THEN 'Y' ELSE 'N' END AS is_earliest
+       FROM vw_claim_evidence e
+      WHERE e.claim_id = :id
+      ORDER BY e.published_at NULLS LAST, e.variant_id`,
+    { id }
+  );
+}
+
+/**
+ * The investigation that led to this claim page: what was asked, how this
+ * family relates to it (SEARCH_CLAIM_MATCHES) and how much retrieved evidence
+ * supported exactly the asked relationship.
+ */
+export async function getClaimInvestigation(id, runId) {
+  await assertClaim(id);
+  const row = await queryOne(
+    `SELECT r.search_run_id, r.query_text, r.query_type, r.hypothesis_text, r.hypothesis_predicate,
+            r.hypothesis_object, m.relationship_to_query, m.evidence_count, m.source_count,
+            (SELECT NVL(SUM(x.evidence_count), 0) FROM search_claim_matches x
+              WHERE x.search_run_id = r.search_run_id AND x.relationship_to_query = 'EXACT') AS exact_evidence
+       FROM web_search_runs r
+       LEFT JOIN search_claim_matches m ON m.search_run_id = r.search_run_id AND m.claim_id = :id
+      WHERE r.search_run_id = :run`,
+    { id, run: runId }
+  );
+  if (!row) throw new NotFoundError(`Web search run #${runId} does not exist.`);
+  return row;
 }
 
 export async function getClaimVariants(id) {

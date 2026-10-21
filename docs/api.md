@@ -24,11 +24,13 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 | `GET /health` | API and database status, pool statistics |
 | `GET /overview` | Home overview: claim, source, web-run and reference counts, the latest investigations, `webSearchAvailable` (`/dashboard` is an alias) |
 | `GET /web-search/:runId/status` | Progress of a run: `status`, current `stage` (searching, normalising, removing duplicates, fetching, matching, building relationships) and the counts |
-| `GET /web-search/:runId/results` | The run (`VW_WEB_SEARCH_RUNS`), its claim families (with `run_sources` and `strong_family`), `strongFamilyDetected`, related sources and stored claim families that match the query |
+| `GET /web-search/:runId/results` | The run (`VW_WEB_SEARCH_RUNS`), its query hypothesis and support counts, claim families from `SEARCH_CLAIM_MATCHES` (relationship `EXACT` / `DIFFERENT_VALUE` / `RELATED` / `TOPICAL`, metrics from `VW_CLAIM_INVESTIGATION`), related sources not assigned to a claim, and stored claim families that match the query |
 | `GET /web-search?limit=` | Recent web search runs |
 | `GET /claims` | Claim families from `VW_CLAIM_OVERVIEW`. Query params: `q`, `platform` (id), `category` (id), `status` (`UNVERIFIED`… or `CURATED` = everything except candidates), `echoBand`, `dateFrom`, `dateTo`, `origin` (`LIVE`, `DEMO`), `run` (search run id), `sourceType` (`DEMO`, `AUTOMATED`, `WEB_SEARCH`, `MANUAL`, `GDELT`, `HACKER_NEWS`, `RSS`), `sort` (`newest`, `sources`, `echo`, `platforms`, `relevance`), `limit` (≤100), `offset` |
 | `GET /claims/:id` | Overview, PL/SQL Echo Ratio (`echo_ratio_plsql`), fingerprint, entities, keywords, platforms |
 | `GET /claims/:id/sources` | Sources and claim versions (`VW_CLAIM_SOURCES`), with dependency, upstream publisher, `lineage_basis`, match breakdown and an `is_earliest` flag (first dated source; undated sources sort last) |
+| `GET /claims/:id/evidence` | Evidence rows from `VW_CLAIM_EVIDENCE` (sentence, method, publisher, URL, date, relation fields, dependency, lineage basis, `is_earliest`) |
+| `GET /claims/:id/investigation?run=` | `VW_CLAIM_INVESTIGATION` row plus, with `run`, the run's hypothesis and this claim's `SEARCH_CLAIM_MATCHES` relationship |
 | `GET /claims/:id/variants` | Structured variants with match score, method and breakdown |
 | `GET /claims/:id/mutations` | Mutation Ledger rows with from/to source details |
 | `GET /claims/:id/claim-lineage` | `{ nodes, edges }` from a `CONNECT BY` over `parent_variant_id` |

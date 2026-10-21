@@ -138,7 +138,7 @@ export default function LineageGraph({ kind, nodes: allNodes = [], edges = [], o
       .filter((e) => ids.has(e.source) && ids.has(e.target))
       .map((e) => {
         // An inferred (lexical) predecessor is drawn dashed: it is not explicit evidence
-        const inferred = kind === 'claim' && basisOf.get(e.target) === 'LEXICAL_PREDECESSOR';
+        const inferred = kind === 'claim' && ['LEXICAL_PREDECESSOR', 'PROPOSITION_PREDECESSOR'].includes(basisOf.get(e.target));
         return {
           id: `${e.source}-${e.target}`,
           source: String(e.source),

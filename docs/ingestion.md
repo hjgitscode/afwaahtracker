@@ -18,15 +18,15 @@ AfwaahTracker collects sources in two modes that share one storage and matching 
 
 Run steps: `START_WEB_SEARCH_RUN` → search → normalise URLs and drop in-batch duplicates → `FIND_SOURCE_ID` links already stored sources to the run → fetch and extract new pages (fallback: search title + snippet) → **one transaction per result** (`INGEST_SOURCE` with origin `WEB_SEARCH`, `RECORD_SEARCH_RESULT_LINK`, references, matching, `CHOOSE_VARIANT_PARENT`, `ADD_CLAIM_VARIANT`, `APPLY_SOURCE_DEPENDENCE`, entity/keyword links) → relationship pass for links between pages stored in the same run → `FINISH_WEB_SEARCH_RUN` (`SUCCESS`, `PARTIAL` when some pages failed, `FAILED` when the search itself failed).
 
-Web results must carry a claim signal before they may start a new claim family: an action verb, a quantity or a stated certainty, plus a dictionary entity or three significant words. Otherwise they are stored as related sources only. Candidate matches (55–74) are attached but do not add entities or keywords to the claim, so loosely related results cannot gradually widen a family.
+Claim intelligence (`server/claims/`): `hypothesis.js` parses the query; `evidence.js` splits page blocks into sentences, scores them and keeps 1–3 (`SOURCE_EVIDENCE`); `propositions.js` extracts subject · predicate · object · qualifier with dictionaries in `lexicon.js` (roles, event verbs); `names.js` normalises names (`Dr. G. V. Selvam` = `GV Selvam`, same as Oracle `NAME_KEY`); `canonical.js` builds the signature and canonical wording. Only a source with an extracted proposition becomes a claim variant; a page title is used as evidence only as the last fallback, and the old headline matcher survives only as a low-priority way to attach to an existing family (it never creates a claim).
 
 ## Evidence-based lineage
 
 | What | Rule |
 |---|---|
-| `SOURCE_REFERENCES` | `HYPERLINK` (an outbound link equals a stored source URL), `SUBMITTED_LINK` (a feed item's submitted link), `CANONICAL_REFERENCE` (canonical URL is another stored source), `MANUAL`. Topical similarity never creates a row |
+| `SOURCE_REFERENCES` | `HYPERLINK` (an outbound link equals a stored source URL), `SUBMITTED_LINK` (a feed item's submitted link), `CANONICAL_REFERENCE` (canonical URL is another stored source), `ATTRIBUTION` (*according to / reported by / via / citing / source:* naming a stored publisher), `MANUAL`. Topical similarity never creates a row |
 | Known upstream source | `APPLY_SOURCE_DEPENDENCE` sets `derived_from_source_id` only when a referenced source is in the same claim family; earliest referenced source wins; cycles refused |
-| Wording parent | `CHOOSE_VARIANT_PARENT`: explicit reference → `EXPLICIT_REFERENCE`; else the most similar strictly earlier variant with `WORDING_SIMILARITY` ≥ 55 → `LEXICAL_PREDECESSOR` (shown as *Inferred predecessor*); else none. `WORDING_SIMILARITY` = 70 % word-overlap coefficient + 30 % `UTL_MATCH.JARO_WINKLER_SIMILARITY` |
+| Wording parent | `CHOOSE_VARIANT_PARENT`: explicit reference → `EXPLICIT_REFERENCE`; else the closest earlier dated variant of the same proposition → `PROPOSITION_PREDECESSOR`; else the most similar strictly earlier variant with `WORDING_SIMILARITY` ≥ 55 → `LEXICAL_PREDECESSOR` (shown as *Inferred predecessor*); else none. `WORDING_SIMILARITY` = 70 % word-overlap coefficient + 30 % `UTL_MATCH.JARO_WINKLER_SIMILARITY` |
 | Existing data | `RELINK_CLAIM_LINEAGE` replaces the old "attach everything to the earliest variant" (`AUTO_ROOT`) links during migration; curated and manual lineage is never touched |
 
 ## Adapters (`server/ingestion/`)

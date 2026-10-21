@@ -9,7 +9,7 @@
  *   published    article:published_time > JSON-LD datePublished > meta date fields
  *                > first <time datetime>
  *   canonical    <link rel=canonical>  (falls back to og:url)
- *   text         paragraphs inside <article>, else <main>, else <body>
+ *   blocks/text  readable blocks inside <article>, else <main>, else <body>
  */
 import * as cheerio from 'cheerio';
 import { cleanText, normaliseUrl, toDate } from '../ingestion/normalizer.js';
@@ -100,12 +100,28 @@ export function extractPage(html, pageUrl) {
 
   $('script, style, noscript, nav, header, footer, aside, form, iframe, svg').remove();
   const scope = $('article').first().length ? $('article').first() : $('main').first().length ? $('main').first() : $('body');
-  const paragraphs = [];
-  scope.find('p').each((_, el) => {
-    const t = cleanText($(el).text(), 2000);
-    if (t.length >= 40) paragraphs.push(t);
+
+  // Readable blocks in document order: headings, paragraphs, list items,
+  // table cells and short leaf elements. Profile pages often put a name and a
+  // title in separate small elements ("Dr. G. V. Selvam" / "Vice President"),
+  // which paragraph-only extraction would lose. Blocks feed evidence selection.
+  const BLOCK = 'h1,h2,h3,h4,h5,p,li,dt,dd,td,th,blockquote,figcaption,div,span,strong,b';
+  const CONTAINER = 'h1,h2,h3,h4,h5,p,li,dl,ul,ol,table,tr,blockquote,figure,div,section,article';
+  const blocks = [];
+  scope.find(BLOCK).each((_, el) => {
+    if (blocks.length >= 300) return false;
+    const node = $(el);
+    const tag = el.tagName?.toLowerCase();
+    // Containers are represented by their children; inline tags only when they stand alone
+    if (node.find(CONTAINER).length) return undefined;
+    if ((tag === 'span' || tag === 'strong' || tag === 'b') && node.parent().closest(BLOCK).length) return undefined;
+    const t = cleanText(node.text(), 1200);
+    if (!t || (blocks.length && blocks[blocks.length - 1] === t)) return undefined;
+    blocks.push(t);
+    return undefined;
   });
-  const text = cleanText(paragraphs.join(' '), 3600) || null;
+  // Stored with line breaks so a later investigation can re-read the blocks
+  const text = blocks.join('\n').slice(0, 3900) || null;
 
   const ogType = meta('meta[property="og:type"]');
   return {
@@ -116,6 +132,7 @@ export function extractPage(html, pageUrl) {
     canonicalUrl,
     description: description ? cleanText(description, 1000) : null,
     text,
+    blocks,
     outboundLinks,
     isArticle: Boolean(articleType && articleType !== 'BlogPosting') || ogType === 'article',
     isBlogPosting: articleType === 'BlogPosting',

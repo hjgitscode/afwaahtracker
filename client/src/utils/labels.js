@@ -5,7 +5,8 @@
  * "Known Echo Ratio".
  */
 export const KNOWN_ECHO_TOOLTIP =
-  'Known Echo Ratio measures detected source dependence among retrieved sources. It does not prove that sources without a known parent are independent, and it does not measure truthfulness.';
+  'Known Echo Ratio measures observable source dependence among retrieved sources. Sources without a detected parent are not proven independent, and the ratio does not measure truthfulness.';
+export const NO_UPSTREAM_NOTE = 'No explicit upstream dependencies were detected among these retrieved sources.';
 export const DEMO_ECHO_TOOLTIP = 'Echo Ratio measures source dependence, not truthfulness.';
 
 export const isDemo = (origin) => origin === 'DEMO';
@@ -29,7 +30,8 @@ export const RETRIEVAL_LABEL = {
 export const LINEAGE_BASIS_LABEL = {
   CURATED: 'Curated',
   MANUAL: 'Manual',
-  EXPLICIT_REFERENCE: 'Explicit reference',
+  EXPLICIT_REFERENCE: 'Known reference',
+  PROPOSITION_PREDECESSOR: 'Inferred predecessor',
   LEXICAL_PREDECESSOR: 'Inferred predecessor',
   AUTO_ROOT: 'Inferred predecessor',
   NONE: 'No known parent',
@@ -39,7 +41,23 @@ export const REFERENCE_TYPE_LABEL = {
   HYPERLINK: 'Hyperlink',
   SUBMITTED_LINK: 'Submitted link',
   CANONICAL_REFERENCE: 'Canonical reference',
+  ATTRIBUTION: 'Attribution',
   MANUAL: 'Manual',
 };
 
 export const NOT_DETERMINED = 'Not determined';
+
+/** How a claim family found relates to what was investigated (SEARCH_CLAIM_MATCHES). */
+export const RELATIONSHIP_LABEL = {
+  EXACT: ['Matches the searched relationship', 'green'],
+  DIFFERENT_VALUE: ['Related claim found', 'amber'],
+  RELATED: ['Same subject, different relationship', 'blue'],
+  TOPICAL: ['Topically related', 'muted'],
+};
+
+export const PREDICATE_TEXT = {
+  HOLDS_ROLE: 'holds role', LOCATED_IN: 'located in', MEMBER_OF: 'member of', FOUNDED_BY: 'founded by', OWNS: 'owns',
+  ANNOUNCED: 'announced', LAUNCHED: 'launched', CANCELLED: 'cancelled', POSTPONED: 'postponed', VISITED: 'visited',
+  PERFORMED_AT: 'performed at', RELEASED: 'released', ACQUIRED: 'acquired', BANNED: 'banned', OPENED: 'opened',
+  CLOSED: 'closed', APPROVED: 'approved', REJECTED: 'rejected', SIGNED: 'signed', RESIGNED_FROM: 'resigned from',
+};

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { CalendarDays, GitBranch, Layers, Link2, Network, Radio, Repeat2 } from 'lucide-react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { CalendarDays, FileText, GitBranch, Layers, Network, Radio, Repeat2, Search } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader.jsx';
 import Card, { CardHeader } from '../components/ui/Card.jsx';
 import Badge, { DependencyBadge, OriginBadge, StatusBadge } from '../components/ui/Badge.jsx';
@@ -10,26 +10,22 @@ import ExternalLink from '../components/ui/ExternalLink.jsx';
 import { EmptyState, ErrorState, LoadingBlock } from '../components/ui/States.jsx';
 import { Watermark } from '../components/layout/BackgroundShapes.jsx';
 import FingerprintCard from '../components/claim/FingerprintCard.jsx';
-import SourceTable from '../components/claim/SourceTable.jsx';
+import EvidenceTable from '../components/claim/EvidenceTable.jsx';
+import DatabaseTrace from '../components/claim/DatabaseTrace.jsx';
 import MutationLedger from '../components/claim/MutationLedger.jsx';
 import Timeline from '../components/claim/Timeline.jsx';
 import LineageGraph from '../components/claim/LineageGraph.jsx';
 import { useApi } from '../hooks/useApi.js';
 import { api } from '../services/api.js';
 import { formatDate, formatDateTime, formatPercent } from '../utils/format.js';
-import { LINEAGE_BASIS_LABEL, echoLabel, isDemo } from '../utils/labels.js';
+import { LINEAGE_BASIS_LABEL, NO_UPSTREAM_NOTE, PREDICATE_TEXT, RELATIONSHIP_LABEL, echoLabel, isDemo } from '../utils/labels.js';
 
 function Metrics({ claim, demo }) {
-  const ratio = claim.echo_ratio_plsql ?? claim.echo_ratio;
+  const ratio = claim.echo_ratio_plsql ?? claim.known_echo_ratio;
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <MetricCard label="Total sources" value={claim.number_of_sources} hint={`${claim.number_of_variants} wording variant${claim.number_of_variants === 1 ? '' : 's'}`} icon={Layers} />
-      <MetricCard
-        label={demo ? 'Derived sources' : 'Known upstream links'}
-        value={claim.number_of_derived_sources}
-        hint={demo ? `${claim.number_of_independent_origins} independent` : `${claim.number_of_independent_origins} with no known upstream source`}
-        icon={Link2}
-      />
+      <MetricCard label="Sources" value={claim.number_of_sources} hint={`${claim.variant_count} source version${claim.variant_count === 1 ? '' : 's'}`} icon={Layers} />
+      <MetricCard label="Evidence" value={claim.evidence_count} hint="Exact sentences from the sources" icon={FileText} />
       <MetricCard label="Platforms" value={claim.number_of_platforms} hint={claim.platforms.map((p) => p.platform_name).slice(0, 3).join(', ')} icon={Radio} />
       <div className="card card-hover p-5 md:p-6">
         <div className="flex items-start justify-between gap-3">
@@ -38,9 +34,59 @@ function Metrics({ claim, demo }) {
         </div>
         <div className="mt-3 text-[2rem] font-extrabold leading-none tracking-tight text-ink">{formatPercent(ratio)}</div>
         <div className="mt-3"><EchoBar ratio={ratio} /></div>
-        <div className="mt-2 text-[12px] font-bold uppercase tracking-[0.06em] text-ink-2">{claim.echo_band}</div>
+        <div className="mt-2 text-[12.5px] text-ink-2">
+          {claim.known_upstream_count
+            ? `${claim.known_upstream_count} of ${claim.number_of_sources} sources have a known upstream source`
+            : demo ? claim.echo_band : NO_UPSTREAM_NOTE}
+        </div>
       </div>
     </div>
+  );
+}
+
+/** What the visitor investigated, when they arrived from a web investigation. */
+function InvestigatedQuery({ id, runId }) {
+  const state = useApi((signal) => api.claimInvestigation(id, runId, { signal }), [id, runId]);
+  const d = state.data;
+  if (!d) return null;
+  const relation = RELATIONSHIP_LABEL[d.relationship_to_query];
+  return (
+    <div className="card mb-6 flex flex-col gap-2 p-5 sm:flex-row sm:items-start sm:gap-4">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-tint text-primary"><Search size={18} /></span>
+      <div className="min-w-0 text-[14.5px] text-ink-2">
+        <div className="meta-label">Investigated query</div>
+        <div className="mt-0.5 text-[16px] font-bold text-ink">{d.query_text}</div>
+        {d.hypothesis_text && relation && (
+          <p className="mt-1">
+            {d.relationship_to_query === 'EXACT'
+              ? 'This claim family matches the searched relationship.'
+              : <>This is a <b className="text-ink">{relation[0].toLowerCase()}</b>, not the searched relationship “{d.hypothesis_text}”.</>}
+            {d.relationship_to_query !== 'EXACT' && !d.exact_evidence && ' No retrieved source in this investigation directly supported the exact searched relationship.'}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Subject · relationship · object · organisation, from CLAIM_PROPOSITIONS. */
+function Proposition({ claim }) {
+  if (!claim.predicate) return null;
+  const parts = [
+    ['Subject', claim.subject],
+    ['Relationship', PREDICATE_TEXT[claim.predicate] || claim.predicate.toLowerCase()],
+    [claim.predicate === 'HOLDS_ROLE' ? 'Role' : 'Object', claim.object],
+    ['Organisation', claim.qualifier],
+  ].filter(([, v]) => v);
+  return (
+    <dl className="mt-4 flex flex-wrap gap-2">
+      {parts.map(([k, v]) => (
+        <div key={k} className="rounded-lg border border-line bg-white/80 px-3 py-1.5">
+          <dt className="text-[10.5px] font-extrabold uppercase tracking-[0.08em] text-muted">{k}</dt>
+          <dd className="text-[14px] font-semibold text-ink">{v}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -104,8 +150,11 @@ function Lineage({ id, kind, demo }) {
 
 export default function ClaimPage() {
   const { id } = useParams();
+  const [params] = useSearchParams();
+  const runId = Number.parseInt(params.get('run'), 10) || null;
   const claimState = useApi((signal) => api.claim(id, { signal }), [id]);
   const sourcesState = useApi((signal) => api.claimSources(id, { signal }), [id]);
+  const evidenceState = useApi((signal) => api.claimEvidence(id, { signal }), [id]);
   const mutationsState = useApi((signal) => api.claimMutations(id, { signal }), [id]);
 
   const crumbs = [{ label: 'Explore', to: '/explore' }, { label: `Claim #${id}` }];
@@ -133,7 +182,9 @@ export default function ClaimPage() {
   return (
     <div className="relative">
       <Watermark word="TRACE" style={{ top: -20, right: -30 }} />
-      <PageHeader crumbs={crumbs} label="Claim family" title={claim.canonical_claim}>
+      {runId && <InvestigatedQuery id={id} runId={runId} />}
+      <PageHeader crumbs={crumbs} label="Canonical claim" title={claim.canonical_claim}>
+        <Proposition claim={claim} />
         <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-[15px] text-ink-2">
           <StatusBadge status={claim.status} />
           <OriginBadge origin={claim.claim_origin} />
@@ -150,18 +201,17 @@ export default function ClaimPage() {
       <div className="relative z-10 space-y-6">
         <Metrics claim={claim} demo={demo} />
 
+        <Card>
+          <CardHeader label="VW_CLAIM_EVIDENCE" title="Evidence from sources" subtitle="The exact sentence each source states, oldest first." icon={FileText} />
+          {evidenceState.error ? <ErrorState compact error={evidenceState.error} onRetry={evidenceState.reload} />
+            : !evidenceState.data ? <LoadingBlock rows={5} />
+              : evidenceState.data.length ? <EvidenceTable rows={evidenceState.data} demo={demo} />
+                : <EmptyState compact title="No evidence stored">This claim has no stored sources yet.</EmptyState>}
+        </Card>
+
         {sourcesState.error ? <ErrorState error={sourcesState.error} onRetry={sourcesState.reload} />
           : !sourcesState.data ? <div className="card card-pad"><LoadingBlock rows={6} /></div>
-            : (
-              <>
-                <Timeline sources={sourcesState.data} demo={demo} />
-                <Card>
-                  <CardHeader label="One row per source" title="Sources" subtitle="Each source and the version of the claim it carried." icon={Layers} />
-                  {sourcesState.data.length ? <SourceTable sources={sourcesState.data} demo={demo} />
-                    : <EmptyState compact title="No sources stored">This claim has no stored sources yet.</EmptyState>}
-                </Card>
-              </>
-            )}
+            : <Timeline sources={sourcesState.data} demo={demo} />}
 
         {mutationsState.error ? <ErrorState error={mutationsState.error} onRetry={mutationsState.reload} />
           : !mutationsState.data ? <div className="card card-pad"><LoadingBlock rows={8} /></div>
@@ -171,6 +221,7 @@ export default function ClaimPage() {
         <Lineage id={id} kind="source" demo={demo} />
 
         <FingerprintCard claim={claim} />
+        <DatabaseTrace claim={claim} />
       </div>
     </div>
   );

@@ -126,39 +126,72 @@ export async function getRunStatus(runId) {
   };
 }
 
+// Claim family columns shared with ClaimCard (all computed by VW_CLAIM_INVESTIGATION)
+const FAMILY_COLUMNS = `
+       ci.claim_id, ci.canonical_claim, ci.status, ci.claim_origin, ci.claim_type,
+       ci.subject, ci.predicate, ci.object, ci.qualifier,
+       ci.first_seen, ci.latest_seen,
+       ci.source_count   AS number_of_sources,
+       ci.platform_count AS number_of_platforms,
+       ci.evidence_count,
+       ci.known_upstream_count AS number_of_derived_sources,
+       ci.known_echo_ratio     AS echo_ratio`;
+
 /**
- * Everything the Explore page needs for one run.
- * A claim family counts as "strong" when two or more of this run's sources
- * belong to it, or one of them matched it strongly (score >= threshold).
+ * Everything the Explore page needs for one run, re-read from Oracle:
+ *   claims          SEARCH_CLAIM_MATCHES (M:N run <-> claim) + VW_CLAIM_INVESTIGATION
+ *   relatedSources  sources of the run that support no claim family
+ *   storedClaims    stored families matching the query text (Oracle first)
+ *   hypothesis      what was investigated, and how many retrieved evidence
+ *                   sentences support exactly that relationship
  */
 export async function getRunResults(runId) {
   const run = await queryOne(`SELECT * FROM vw_web_search_runs WHERE search_run_id = :id`, { id: runId });
   if (!run) throw new NotFoundError(`Web search run #${runId} does not exist.`);
 
-  const [families, strongRows, related, stored] = await Promise.all([
-    listClaims({ run: runId, sort: 'sources', limit: 60 }),
+  const [claims, related, stored, support] = await Promise.all([
     query(
-      `SELECT DISTINCT v.claim_id
-         FROM search_result_links l JOIN claim_variants v ON v.source_id = l.source_id
-        WHERE l.search_run_id = :id AND v.match_method IN ('RULE_STRONG','CURATED','MANUAL')`,
+      `SELECT ${FAMILY_COLUMNS},
+              m.relationship_to_query, m.match_score,
+              m.evidence_count AS run_evidence_count, m.source_count AS run_source_count
+         FROM search_claim_matches m
+         JOIN vw_claim_investigation ci ON ci.claim_id = m.claim_id
+        WHERE m.search_run_id = :id
+        ORDER BY DECODE(m.relationship_to_query, 'EXACT', 1, 'DIFFERENT_VALUE', 2, 'RELATED', 3, 4),
+                 m.source_count DESC, ci.evidence_count DESC, ci.claim_id`,
       { id: runId }
     ),
-    listSources({ run: runId, limit: 60, sort: 'newest' }),
+    listSources({ run: runId, claimLinked: 'N', limit: 60, sort: 'newest' }),
     // Oracle first: stored claim families that match the query text
     listClaims({ q: run.query_text, limit: 12 }),
+    // Evidence counts per relationship to the hypothesis (GROUP BY in Oracle)
+    query(
+      `SELECT relationship_to_query, COUNT(*) AS families,
+              SUM(evidence_count) AS evidence, SUM(source_count) AS sources
+         FROM search_claim_matches
+        WHERE search_run_id = :id
+        GROUP BY relationship_to_query`,
+      { id: runId }
+    ),
   ]);
 
-  const strongIds = new Set(strongRows.map((r) => r.claim_id));
-  const claims = families.claims
-    .map((c) => ({ ...c, strong_family: strongIds.has(c.claim_id) || (c.run_sources || 0) >= 2 ? 'Y' : 'N' }))
-    .sort((a, b) => (b.strong_family === 'Y') - (a.strong_family === 'Y') || b.run_sources - a.run_sources || b.number_of_sources - a.number_of_sources);
   const runClaimIds = new Set(claims.map((c) => c.claim_id));
-
+  const by = Object.fromEntries(support.map((r) => [r.relationship_to_query, r]));
   return {
     run,
     webSearchAvailable: isWebSearchConfigured(),
     message: run.status === 'FAILED' ? run.error_message || UNAVAILABLE_MESSAGE : null,
-    strongFamilyDetected: claims.some((c) => c.strong_family === 'Y'),
+    hypothesis: run.query_type === 'TOPIC_SEARCH' ? null : {
+      queryType: run.query_type,
+      text: run.hypothesis_text,
+      subject: run.hypothesis_subject,
+      predicate: run.hypothesis_predicate,
+      object: run.hypothesis_object,
+      qualifier: run.hypothesis_qualifier,
+      exactEvidence: by.EXACT?.evidence || 0,
+      exactSources: by.EXACT?.sources || 0,
+    },
+    support: by,
     claims,
     relatedSources: related.sources,
     relatedSourceCount: related.total,

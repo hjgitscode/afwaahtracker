@@ -1,6 +1,6 @@
 --------------------------------------------------------------------------------
 -- AfwaahTracker :: 08_demo_queries.sql
--- 37 read-only demonstration queries. Each is labelled with the SQL concept
+-- 42 read-only demonstration queries. Each is labelled with the SQL concept
 -- it demonstrates. Run after install.sql:
 --     sqlplus afwaah/afwaah@localhost:1521/FREEPDB1 @08_demo_queries.sql
 -- Substitution variables are not used; literal search terms are shown so the
@@ -300,7 +300,55 @@ SELECT lineage_basis, COUNT(*) AS variants,
  GROUP BY lineage_basis
  ORDER BY variants DESC;
 
-PROMPT ===== Q37. Deterministic wording similarity (PL/SQL function used for inferred predecessors) =====
-SELECT wording_similarity('Aakash Gupta may visit VIT', 'Aakash Gupta will perform at VIT Vibrance') AS similar_pair,
-       wording_similarity('Aakash Gupta may visit VIT', 'Exam results postponed by the board')    AS unrelated_pair
-  FROM dual;
+PROMPT ===== Q37. Structured propositions behind claim families (CLAIM_PROPOSITIONS + ENTITIES) =====
+SELECT p.claim_id, p.claim_type, se.entity_name AS subject, p.predicate_code,
+       p.object_text, qe.entity_name AS qualifier, p.normalized_signature
+  FROM claim_propositions p
+  LEFT JOIN entities se ON se.entity_id = p.subject_entity_id
+  LEFT JOIN entities qe ON qe.entity_id = p.qualifier_entity_id
+ ORDER BY p.claim_id;
+
+PROMPT ===== Q38. Exact evidence sentences per source (SOURCE_EVIDENCE, best first) =====
+SELECT s.publisher, e.extraction_method, e.relevance_score,
+       SUBSTR(e.sentence_text, 1, 90) AS evidence
+  FROM source_evidence e
+  JOIN sources s ON s.source_id = e.source_id
+ WHERE e.extraction_method <> 'CURATED'
+ ORDER BY e.relevance_score DESC
+ FETCH FIRST 15 ROWS ONLY;
+
+PROMPT ===== Q39. Searched relationship vs claims found (SEARCH_CLAIM_MATCHES, M:N) =====
+SELECT r.query_text, r.hypothesis_text, m.relationship_to_query,
+       c.canonical_claim, m.evidence_count, m.source_count
+  FROM web_search_runs r
+  JOIN search_claim_matches m ON m.search_run_id = r.search_run_id
+  JOIN claims c               ON c.claim_id = m.claim_id
+ ORDER BY r.search_run_id, m.match_score DESC;
+
+PROMPT ===== Q40. Sources that support a claim but state no evidence for the searched relationship (NOT EXISTS) =====
+SELECT DISTINCT r.query_text, s.publisher, c.canonical_claim
+  FROM web_search_runs r
+  JOIN search_result_links l ON l.search_run_id = r.search_run_id
+  JOIN claim_variants v      ON v.source_id = l.source_id
+  JOIN claims c              ON c.claim_id = v.claim_id
+  JOIN sources s             ON s.source_id = v.source_id
+ WHERE r.query_type = 'CLAIM_QUERY'
+   AND NOT EXISTS (SELECT 1 FROM search_claim_matches m
+                    WHERE m.search_run_id = r.search_run_id
+                      AND m.claim_id = v.claim_id
+                      AND m.relationship_to_query = 'EXACT');
+
+PROMPT ===== Q41. Aliases resolved to one entity (ENTITY_ALIASES + NAME_KEY function) =====
+SELECT e.entity_name, a.alias_text, name_key(a.alias_text) AS name_key
+  FROM entities e
+  JOIN entity_aliases a ON a.entity_id = e.entity_id
+ WHERE e.entity_id IN (SELECT entity_id FROM entity_aliases GROUP BY entity_id HAVING COUNT(*) >= 3)
+ ORDER BY e.entity_name, a.alias_text;
+
+PROMPT ===== Q42. Complete investigation metrics per claim family (VW_CLAIM_INVESTIGATION) =====
+SELECT claim_id, SUBSTR(canonical_claim, 1, 50) AS claim, source_count, evidence_count,
+       platform_count, known_upstream_count, known_echo_ratio,
+       TO_CHAR(first_seen, 'YYYY-MM-DD') AS first_seen
+  FROM vw_claim_investigation
+ WHERE source_count > 0
+ ORDER BY CASE claim_origin WHEN 'DEMO' THEN 1 ELSE 0 END, source_count DESC;

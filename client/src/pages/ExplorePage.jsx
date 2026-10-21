@@ -16,10 +16,10 @@ import { formatDate, truncate } from '../utils/format.js';
 
 const PAGE = 24;
 
-function ClaimGrid({ claims }) {
+function ClaimGrid({ claims, runId = null }) {
   return (
     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-      {claims.map((c) => <ClaimCard key={c.claim_id} claim={c} />)}
+      {claims.map((c) => <ClaimCard key={c.claim_id} claim={c} runId={runId} />)}
     </div>
   );
 }
@@ -57,6 +57,49 @@ function SourceList({ sources, initial = 8 }) {
         </button>
       )}
     </>
+  );
+}
+
+/**
+ * What was asked versus what was found. Every number comes from Oracle
+ * (SEARCH_CLAIM_MATCHES grouped by relationship). No truth verdict is given.
+ */
+function HypothesisPanel({ data, query }) {
+  const h = data.hypothesis;
+  const different = data.claims.filter((c) => c.relationship_to_query === 'DIFFERENT_VALUE');
+  const exact = data.claims.filter((c) => c.relationship_to_query === 'EXACT');
+  return (
+    <div className="card card-pad">
+      <div className="grid gap-5 lg:grid-cols-[1fr_1.2fr]">
+        <div className="min-w-0">
+          <div className="system-label">Investigated query</div>
+          <p className="mt-1 text-[18px] font-extrabold text-ink">{query}</p>
+          {h?.text ? (
+            <p className="mt-1 text-[14px] text-ink-2">
+              Searched relationship: <span className="font-semibold text-ink">{h.text}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-[14px] text-ink-2">Topic search: no single claim was assumed. Claim families below come only from the retrieved pages.</p>
+          )}
+        </div>
+        {h?.text && (
+          <div className="min-w-0 rounded-xl bg-tint/70 p-4 text-[14.5px] text-ink-2">
+            {exact.length ? (
+              <p><b className="text-ink">{h.exactSources}</b> retrieved source{h.exactSources === 1 ? '' : 's'} contain{h.exactSources === 1 ? 's' : ''} evidence for exactly this relationship.</p>
+            ) : (
+              <p><b className="text-ink">0</b> retrieved evidence sentences contain the exact searched relationship. No retrieved source in this investigation directly supported it.</p>
+            )}
+            {different.map((c) => (
+              <p key={c.claim_id} className="mt-2">
+                <span className="meta-label mr-1.5">Related claim found</span>
+                <b className="text-ink">{c.canonical_claim}</b> — {c.run_source_count} retrieved source{c.run_source_count === 1 ? '' : 's'} contain evidence for “{c.object}”.
+              </p>
+            ))}
+            <p className="mt-2 text-[12.5px] text-muted">AfwaahTracker reports what retrieved sources state. It does not decide whether a claim is true.</p>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -115,39 +158,35 @@ function RunView({ runId, query }) {
         : !data ? <LoadingCards count={3} />
           : (
             <>
+              {!failed && <HypothesisPanel data={data} query={query} />}
+
+              {/* A. Claim families found (SEARCH_CLAIM_MATCHES) */}
               {!failed && (
-                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[15px] text-ink-2">
-                  <span><b className="text-ink">{data.relatedSourceCount}</b> relevant publicly indexed source{data.relatedSourceCount === 1 ? '' : 's'}</span>
-                  <span><b className="text-ink">{data.claims.length}</b> claim famil{data.claims.length === 1 ? 'y' : 'ies'}</span>
-                </div>
-              )}
-
-              {!failed && !data.strongFamilyDetected && (
-                <Card>
-                  <CardHeader label="Result" title="No strong claim family detected" icon={Unlink}
-                    subtitle={data.relatedSourceCount
-                      ? 'The retrieved sources do not repeat one specific claim. They are listed below as related sources.'
-                      : 'The web search returned no usable results for this query.'} />
-                </Card>
-              )}
-
-              {data.claims.length > 0 && (
                 <section>
-                  <h2 className="system-label mb-3">{data.strongFamilyDetected ? 'Claim families' : 'Possible claim families'}</h2>
-                  <ClaimGrid claims={data.claims} />
+                  <h2 className="system-label mb-3">Claim families found</h2>
+                  {data.claims.length ? <ClaimGrid claims={data.claims} runId={runId} /> : (
+                    <div className="card"><EmptyState icon={Unlink} title="No claim family could be extracted">
+                      {data.relatedSourceCount
+                        ? 'The retrieved pages did not state a structured claim. They are listed below as related sources.'
+                        : 'The web search returned no usable results for this query.'}
+                    </EmptyState></div>
+                  )}
                 </section>
               )}
 
+              {/* B. Related sources that support no claim family */}
               {data.relatedSources.length > 0 && (
                 <Card>
-                  <CardHeader label="Search results stored in Oracle" title="Relevant publicly indexed sources" icon={Layers} />
+                  <CardHeader label="Stored in Oracle" title="Related sources not assigned to a claim" icon={Layers}
+                    subtitle="Relevant publicly indexed sources from which no structured claim could be extracted." />
                   <SourceList sources={data.relatedSources} />
                 </Card>
               )}
 
+              {/* C. Stored matches */}
               {data.storedClaims.length > 0 && (
                 <section>
-                  <h2 className="system-label mb-3">Already stored in Oracle</h2>
+                  <h2 className="system-label mb-3">Stored matches</h2>
                   <ClaimGrid claims={data.storedClaims} />
                 </section>
               )}

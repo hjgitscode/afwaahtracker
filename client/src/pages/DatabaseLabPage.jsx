@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, GitMerge, Globe, Play, Rss, RefreshCw, Workflow } from 'lucide-react';
 import PageHeader from '../components/ui/PageHeader.jsx';
 import Card, { CardHeader } from '../components/ui/Card.jsx';
@@ -39,18 +39,20 @@ function Examples({ queries }) {
   const [key, setKey] = useState(queries[0]?.key);
   const [state, setState] = useState({ loading: false, data: null, error: null });
   const q = queries.find((x) => x.key === key) || queries[0];
-  const select = (k) => {
-    setKey(k);
-    setState({ loading: false, data: null, error: null });
-  };
-  const run = async () => {
+  const run = async (k = q.key) => {
     setState({ loading: true, data: null, error: null });
     try {
-      setState({ loading: false, data: await api.labQuery(q.key), error: null });
+      setState({ loading: false, data: await api.labQuery(k), error: null });
     } catch (error) {
       setState({ loading: false, data: null, error });
     }
   };
+  // Every example shows its current result: SQL, then what Oracle returns now
+  useEffect(() => {
+    if (q) run(q.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q?.key]);
+  const select = (k) => setKey(k);
   if (!q) return null;
   return (
     <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -72,8 +74,8 @@ function Examples({ queries }) {
       <div className="min-w-0" role="tabpanel">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="system-label">{q.concept}</div>
-          <button type="button" onClick={run} disabled={state.loading} className="btn btn-secondary btn-sm">
-            <Play size={14} /> {state.loading ? 'Running…' : 'Run query'}
+          <button type="button" onClick={() => run()} disabled={state.loading} className="btn btn-secondary btn-sm">
+            <Play size={14} /> {state.loading ? 'Running…' : 'Run again'}
           </button>
         </div>
         <Sql code={q.sql} />
@@ -238,7 +240,7 @@ export default function DatabaseLabPage() {
         </Card>
 
         <Card>
-          <CardHeader label="Read-only · fixed whitelist" title="Example SQL" subtitle="These queries run against the live schema. Arbitrary SQL cannot be executed from the browser." />
+          <CardHeader label="Read-only · fixed whitelist" title="Example SQL" subtitle="Each query runs against the live schema and shows its current result. Arbitrary SQL cannot be executed from the browser." />
           {data ? <Examples queries={data.queries} /> : <LoadingBlock rows={6} />}
         </Card>
 

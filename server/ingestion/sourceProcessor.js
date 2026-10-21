@@ -4,26 +4,39 @@
  * The caller wraps each call in ONE transaction (withTransaction), so a
  * failure rolls back only that item.
  *
- *   1. INGEST_SOURCE            deduplicated insert (0 = already stored)
- *   2. explicit references      hyperlinks / canonical URL that point at
- *                               stored sources -> SOURCE_REFERENCES
- *   3. rule-based analysis      entities, keywords, certainty, action ...
- *   4. FIND best claim          weighted score 40/30/10/10/5/5
- *   5. CHOOSE_VARIANT_PARENT    explicit reference > inferred predecessor > none
- *   6. ADD_CLAIM_VARIANT        trigger writes the Mutation Ledger
- *   7. APPLY_SOURCE_DEPENDENCE  known upstream source, explicit evidence only
- *   8. entity / keyword links (new claims and strong matches only)
+ *   WEB PAGE -> EVIDENCE SENTENCE -> STRUCTURED PROPOSITION -> CLAIM FAMILY
+ *
+ *   1. INGEST_SOURCE              deduplicated insert (0 = already stored)
+ *   2. explicit references        hyperlinks / canonical URL -> SOURCE_REFERENCES
+ *   3. evidence sentences         page sentence > meta description > search
+ *                                 snippet > title; RECORD_EVIDENCE (MERGE)
+ *   4. structured proposition     subject | predicate | object | qualifier
+ *   5. RESOLVE_ENTITY             aliases -> one entity per real name
+ *   6. Oracle candidate claims    same subject + predicate + qualifier
+ *      (CLAIM_PROPOSITIONS)       exact signature > similar object > new family
+ *   7. CREATE_PROPOSITION_CLAIM   new family (CLAIMS + FINGERPRINTS + proposition)
+ *   8. CHOOSE_VARIANT_PARENT      explicit reference > proposition predecessor
+ *   9. ADD_CLAIM_VARIANT          evidence-linked variant; trigger -> Mutation Ledger
+ *  10. attribution + dependence   "according to X" -> ATTRIBUTION reference,
+ *                                 APPLY_SOURCE_DEPENDENCE (explicit evidence only)
+ *  11. entity / keyword links
+ * A source without an extractable proposition stays a related source. The
+ * old headline scoring survives only as a fallback into older claim families
+ * that have no proposition (demo / earlier data); it never creates a claim.
  */
 import { oracledb } from '../db/pool.js';
 import { detectEntities, detectKnownKeywords, detectEntityCandidates } from './entityMatcher.js';
 import {
   detectCertainty, detectAction, detectQuantity, frequentTerms, findBestClaim, classify, describeBreakdown,
 } from './matcher.js';
-import { significantTokens } from './normalizer.js';
+import { extractProposition, quantityOf } from '../claims/propositions.js';
+import { selectEvidence, makeScorer, detectAttributions } from '../claims/evidence.js';
+import { makeEntityHelpers } from '../claims/entities.js';
+import { canonicalText, objectKey, signatureOf, objectSimilarity } from '../claims/canonical.js';
+import { roleCode } from '../claims/lexicon.js';
 
+/** Legacy headline analysis, used only for the fallback into older claim families. */
 export function analyseItem(item, dictionary) {
-  // Entities and keywords come from the headline only; snippets are often
-  // boilerplate and would add unrelated entities to the comparison.
   const entities = detectEntities(item.title, dictionary);
   const keywords = detectKnownKeywords(item.title, dictionary);
   const firstOf = (type) => entities.find((e) => e.type === type)?.name || null;
@@ -41,19 +54,6 @@ export function analyseItem(item, dictionary) {
     autoTerms: frequentTerms(item.title, entities.map((e) => e.alias).concat(keywords.map((k) => k.text))),
     candidates: detectEntityCandidates(item.title, entities),
   };
-}
-
-/**
- * Does a headline state something specific enough to start a claim family?
- * Used for web results so that broad explainers ("What is climate change?")
- * are stored as related sources instead of being forced into new claims.
- * Rule: an action verb, a quantity or a stated certainty, plus at least one
- * dictionary entity or three significant words.
- */
-export function hasClaimSignal(analysis) {
-  const structure = Boolean(analysis.action || analysis.quantity || analysis.certainty !== 'UNSTATED');
-  const subject = analysis.entities.length > 0 || significantTokens(analysis.title).length >= 3;
-  return structure && subject;
 }
 
 /** Resolve normalised URLs to stored SOURCE_IDs (one indexed query per 100 URLs). */
@@ -108,16 +108,23 @@ export async function recordReferences(db, sourceId, { links = [], canonicalUrl 
   return added;
 }
 
-async function chooseParent(db, claimId, sourceId, text) {
+async function chooseParent(db, claimId, sourceId, text, fields = {}) {
   const r = await db.exec(
     `BEGIN choose_variant_parent(p_claim_id => :claim_id, p_source_id => :source_id, p_variant_text => :text,
-                                 o_parent_variant_id => :parent, o_basis => :basis, o_similarity => :sim); END;`,
+                                 o_parent_variant_id => :parent, o_basis => :basis, o_similarity => :sim,
+                                 p_certainty => :certainty, p_claimed_date => :claimed_date, p_quantity => :quantity,
+                                 p_location => :location, p_rel_object => :rel_object); END;`,
     {
       claim_id: claimId,
       source_id: sourceId,
       text,
+      certainty: fields.certainty || null,
+      claimed_date: fields.date || null,
+      quantity: fields.quantity || null,
+      location: fields.location || null,
+      rel_object: fields.relObject || null,
       parent: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-      basis: { dir: oracledb.BIND_OUT, type: oracledb.STRING, maxSize: 20 },
+      basis: { dir: oracledb.BIND_OUT, type: oracledb.STRING, maxSize: 30 },
       sim: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
     }
   );
@@ -138,7 +145,7 @@ export async function refreshLineage(db, sourceId) {
   const variants = await db.rows(
     `SELECT variant_id, claim_id, variant_text, parent_variant_id, lineage_basis
        FROM claim_variants
-      WHERE source_id = :id AND lineage_basis IN ('NONE','LEXICAL_PREDECESSOR','AUTO_ROOT')`,
+      WHERE source_id = :id AND lineage_basis IN ('NONE','LEXICAL_PREDECESSOR','PROPOSITION_PREDECESSOR','AUTO_ROOT')`,
     { id: sourceId }
   );
   for (const v of variants) {
@@ -153,21 +160,314 @@ export async function refreshLineage(db, sourceId) {
   return upstream;
 }
 
+
+const MAX_PROPOSITIONS_PER_SOURCE = 2;
+
+async function resolveEntity(db, text, type, acronym = null) {
+  if (!text) return null;
+  const r = await db.exec(`BEGIN :id := resolve_entity(:t, :ty, 'Y', :acr); END;`, {
+    id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+    t: String(text).slice(0, 200),
+    ty: type,
+    acr: acronym,
+  });
+  if (!r.outBinds.id) return null;
+  const row = await db.one('SELECT entity_id, entity_name FROM entities WHERE entity_id = :id', { id: r.outBinds.id });
+  return row ? { id: row.entity_id, name: row.entity_name } : null;
+}
+
+async function recordEvidence(db, sourceId, runId, ev) {
+  const r = await db.exec(
+    `BEGIN :id := record_evidence(:src, :run, :txt, :ord, :score, :type, :method); END;`,
+    {
+      id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+      src: sourceId, run: runId || null, txt: ev.text, ord: ev.order, score: ev.score, type: ev.type, method: ev.method,
+    }
+  );
+  return r.outBinds.id;
+}
+
 /**
- * Store and analyse one normalised item.
+ * Oracle finds the candidate claim families: same subject, predicate,
+ * qualifier and time scope (CLAIM_PROPOSITIONS, indexed). JavaScript only
+ * compares the object of the few candidates returned.
+ */
+async function findPropositionClaim(db, keys) {
+  const rows = await db.rows(
+    `SELECT p.claim_id, p.normalized_signature, p.object_key
+       FROM claim_propositions p
+       JOIN claims c ON c.claim_id = p.claim_id
+      WHERE p.subject_key = :sk
+        AND p.predicate_code = :pred
+        AND NVL(p.qualifier_key, '~') = NVL(:qk, '~')
+        AND NVL(p.temporal_scope, 'CURRENT') = NVL(:ts, 'CURRENT')
+      ORDER BY CASE WHEN p.normalized_signature = :sig THEN 0 ELSE 1 END, p.claim_id
+      FETCH FIRST 25 ROWS ONLY`,
+    { sk: keys.subjectKey, pred: keys.predicate, qk: keys.qualifierKey, ts: keys.temporal, sig: keys.signature }
+  );
+  const exact = rows.find((r) => r.normalized_signature === keys.signature);
+  if (exact) return { claimId: exact.claim_id, method: 'PROPOSITION_EXACT', score: 100 };
+  // Event objects may be worded differently ("iPhone 17" / "the iPhone 17 lineup");
+  // roles and locations must match exactly (Director is not Vice President).
+  if (keys.claimType === 'EVENT_ACTION') {
+    let best = null;
+    for (const r of rows) {
+      const sim = objectSimilarity(r.object_key, keys.objectKey);
+      if (sim >= 0.6 && (!best || sim > best.sim)) best = { claimId: r.claim_id, sim };
+    }
+    if (best) return { claimId: best.claimId, method: 'PROPOSITION_SIMILAR', score: Math.round(60 + 40 * best.sim) };
+  }
+  return null;
+}
+
+/** Attach one extracted proposition (with its evidence) to a claim family. */
+async function attachProposition(db, prop, ev, ctx) {
+  const { sourceId, helpers, categoryId, originLabel, publisher, sentenceAnalysis } = ctx;
+  const subjectType = helpers.guessType(prop.subject, prop.subjectType);
+  const subject = await resolveEntity(db, prop.subject, subjectType);
+  if (!subject) return null;
+  const qualifier = prop.qualifier
+    ? await resolveEntity(db, prop.qualifier, 'ORGANISATION', prop.qualifierAcronym || null)
+    : null;
+  // Remember the spellings actually used on the page as aliases of the same
+  // entity ("Dr G V Selvam", "G.V. Selvam" -> G. V. Selvam)
+  if (prop.subjectSurface && prop.subjectSurface !== prop.subject) await resolveEntity(db, prop.subjectSurface, subjectType);
+  if (qualifier && prop.qualifierSurface && prop.qualifierSurface !== prop.qualifier) {
+    await resolveEntity(db, String(prop.qualifierSurface).replace(/\s*\([A-Z]{2,8}\)$/, '').replace(/^the\s+/i, ''), 'ORGANISATION', prop.qualifierAcronym || null);
+  }
+  const objectEntity = prop.objectType === 'LOCATION' || prop.objectType === 'PERSON' || (prop.objectType === 'ORGANISATION')
+    ? await resolveEntity(db, prop.object, prop.objectType)
+    : null;
+
+  const named = {
+    ...prop,
+    subject: subject.name,
+    qualifier: qualifier ? qualifier.name : prop.qualifier,
+    object: objectEntity ? objectEntity.name : prop.object,
+  };
+  const keys = {
+    claimType: prop.claimType,
+    subjectKey: `E${subject.id}`,
+    predicate: prop.predicate,
+    objectKey: objectKey(prop, objectEntity ? `E${objectEntity.id}` : null),
+    qualifierKey: qualifier ? `E${qualifier.id}` : null,
+    temporal: prop.temporal || null,
+  };
+  keys.signature = signatureOf(keys);
+
+  let match = await findPropositionClaim(db, keys);
+  let claimId;
+  let created = false;
+  if (match) {
+    claimId = match.claimId;
+  } else {
+    const r = await db.exec(
+      `BEGIN create_proposition_claim(:canonical, :category, :ctype, :sid, :stext, :skey, :pred, :oid, :otext, :okey,
+                                      :qid, :qtext, :qkey, :temporal, :sig, :origin, :claim_id, :created); END;`,
+      {
+        canonical: canonicalText(named), category: categoryId, ctype: prop.claimType,
+        sid: subject.id, stext: subject.name, skey: keys.subjectKey, pred: prop.predicate,
+        oid: objectEntity?.id || null, otext: named.object, okey: keys.objectKey,
+        qid: qualifier?.id || null, qtext: named.qualifier || null, qkey: keys.qualifierKey,
+        temporal: prop.temporal || null, sig: keys.signature, origin: originLabel,
+        claim_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+        created: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+      }
+    );
+    claimId = r.outBinds.claim_id;
+    created = r.outBinds.created === 1;
+    match = { method: created ? 'NEW_CLAIM' : 'PROPOSITION_EXACT', score: created ? 0 : 100 };
+  }
+
+  // A source contributes one variant per claim family
+  const existing = await db.one('SELECT variant_id FROM claim_variants WHERE claim_id = :c AND source_id = :s', { c: claimId, s: sourceId });
+  if (existing) return { claimId, newClaim: false, method: match.method, variantId: existing.variant_id, reused: true };
+
+  const attributions = detectAttributions(ev.text);
+  const fields = {
+    certainty: prop.certainty,
+    date: prop.date || null,
+    quantity: quantityOf(ev.text),
+    // A place is recorded for location relations and events only; for roles a
+    // place inside an organisation's name ("Vellore Institute ...") is not one
+    location: prop.predicate === 'LOCATED_IN' ? named.object
+      : prop.claimType === 'EVENT_ACTION' ? prop.location || sentenceAnalysis.location : null,
+    relObject: named.object,
+  };
+  const parent = created ? { parentId: null, basis: 'NONE' } : await chooseParent(db, claimId, sourceId, ev.text, fields);
+  const breakdown = created
+    ? `New claim family from ${prop.basis} (${keys.signature}).`
+    : `${match.method === 'PROPOSITION_EXACT' ? 'Same structured proposition' : 'Same subject and predicate, similar object'} (${keys.signature}); extracted by ${prop.basis}.`;
+
+  const added = await db.exec(
+    `BEGIN
+       add_claim_variant(
+         p_claim_id => :claim_id, p_source_id => :source_id, p_parent_variant_id => :parent_id,
+         p_variant_text => :text, p_actor => :actor, p_action => :action,
+         p_target_object => :target, p_location_name => :location, p_event_name => :event,
+         p_claimed_date => :claimed_date, p_quantity_value => :quantity, p_certainty => :certainty,
+         p_attribution => :attribution, p_match_score => :score, p_match_method => :method,
+         p_lineage_basis => :basis, p_match_breakdown => :breakdown, o_variant_id => :variant_id,
+         p_evidence_id => :evidence_id, p_rel_subject => :rs, p_rel_predicate => :rp,
+         p_rel_object => :ro, p_rel_qualifier => :rq, p_extraction_basis => :eb);
+     END;`,
+    {
+      claim_id: claimId,
+      source_id: sourceId,
+      parent_id: parent.parentId,
+      text: ev.text,
+      actor: subject.name,
+      action: sentenceAnalysis.action,
+      // the event object is recorded once, as the structured relation object
+      target: null,
+      location: fields.location,
+      event: prop.claimType === 'EVENT_ACTION' ? sentenceAnalysis.event : null,
+      claimed_date: fields.date,
+      quantity: fields.quantity,
+      certainty: prop.certainty,
+      attribution: attributions.length ? attributions.join(', ') : publisher,
+      score: match.score,
+      method: match.method,
+      basis: parent.basis,
+      breakdown: breakdown.slice(0, 400),
+      variant_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+      evidence_id: ev.evidenceId,
+      // canonical entity name: spelling variants are aliases, not mutations
+      rs: subject.name,
+      rp: prop.predicate,
+      ro: named.object,
+      rq: named.qualifier || null,
+      eb: prop.basis,
+    }
+  );
+
+  // Provenance: attributions to a stored publisher in the same family, then
+  // the known upstream source (explicit evidence only)
+  let referencesAdded = 0;
+  for (const name of attributions) {
+    const r = await db.exec(`BEGIN :n := record_attribution_reference(:s, :p); END;`, {
+      n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, s: sourceId, p: name,
+    });
+    referencesAdded += r.outBinds.n || 0;
+  }
+  const upstream = await applySourceDependence(db, sourceId);
+
+  // Entities: the proposition's own entities plus dictionary entities in the sentence
+  const entityIds = new Set([subject.id, qualifier?.id, objectEntity?.id, ...sentenceAnalysis.entities.map((e) => e.entityId)].filter(Boolean));
+  for (const id of entityIds) {
+    await db.exec(`BEGIN link_claim_entity(:claim_id, :entity_id, 'DICTIONARY'); END;`, { claim_id: claimId, entity_id: id });
+  }
+  const keywordTexts = new Set(sentenceAnalysis.keywords.map((k) => k.text));
+  if (created) {
+    if (prop.predicate === 'HOLDS_ROLE') keywordTexts.add(roleCode(prop.object).toLowerCase().replace(/_/g, ' '));
+    sentenceAnalysis.autoTerms.forEach((t) => keywordTexts.add(t));
+  }
+  for (const kw of keywordTexts) {
+    await db.exec(`BEGIN link_claim_keyword(:claim_id, :kw, 'AUTO'); END;`, { claim_id: claimId, kw: kw.slice(0, 80) });
+  }
+
+  return {
+    claimId,
+    newClaim: created,
+    method: match.method,
+    variantId: added.outBinds.variant_id,
+    lineageBasis: parent.basis,
+    upstreamSourceId: upstream || null,
+    referencesAdded,
+  };
+}
+
+/**
+ * Evidence + propositions for one stored source (new or already stored).
  *
- * options:
- *   platformId, ingestionSourceId, categoryId
- *   origin              'AUTOMATED' (feeds) | 'WEB_SEARCH'
- *   originLabel         text used in the fingerprint / audit, e.g. "Hacker News"
- *   dictionary          from loadDictionary()
- *   requireClaimSignal  when true, a weak headline that matches no claim is
- *                       stored as a related source without a claim family
+ * ctx = { sourceId, runId, input: { blocks, text, description, snippet, title },
+ *         page: { title, publisher, url }, hypothesis, scorer, dictionary,
+ *         categoryId, originLabel, publisher }
+ */
+export async function analyseSourceEvidence(db, ctx) {
+  const helpers = makeEntityHelpers(ctx.dictionary, ctx.hypothesis);
+  const scorer = ctx.scorer || makeScorer({ hypothesis: ctx.hypothesis, query: ctx.input.title, aliasesFor: helpers.aliasesFor });
+  const entityTest = (t) => detectEntities(t, ctx.dictionary).length > 0;
+  const evidence = selectEvidence(ctx.input, scorer, { entityTest });
+
+  const result = { evidenceCount: evidence.length, claims: [], referencesAdded: 0 };
+  if (!evidence.length) return result;
+
+  for (const ev of evidence) ev.evidenceId = await recordEvidence(db, ctx.sourceId, ctx.runId, ev);
+
+  const extractCtx = {
+    knownOrg: helpers.knownOrg,
+    contextOrg: helpers.contextOrgFor(ctx.page),
+  };
+  const seen = new Set();
+  for (const ev of evidence) {
+    if (result.claims.length >= MAX_PROPOSITIONS_PER_SOURCE) break;
+    const prop = extractProposition(ev.text, extractCtx);
+    if (!prop) continue;
+    const sig = `${prop.subject}|${prop.predicate}|${prop.object}|${prop.qualifier}`.toLowerCase();
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    const sentenceAnalysis = analyseItem({ title: ev.text, publishedAt: null }, ctx.dictionary);
+    const out = await attachProposition(db, prop, ev, { ...ctx, helpers, sentenceAnalysis });
+    if (out) {
+      result.claims.push(out);
+      result.referencesAdded += out.referencesAdded;
+    }
+  }
+
+  // Fallback (low priority): older claim families without a proposition may
+  // still receive a strong headline/entity match. Never creates a claim.
+  if (!result.claims.length) {
+    const best = evidence[0];
+    const analysis = analyseItem({ title: best.text, publishedAt: ctx.publishedAt || null }, ctx.dictionary);
+    const match = await findBestClaim(db, analysis);
+    if (match && classify(match.score.total) === 'RULE_STRONG') {
+      const legacy = await db.one(
+        `SELECT c.claim_id FROM claims c
+          WHERE c.claim_id = :id
+            AND NOT EXISTS (SELECT 1 FROM claim_propositions p WHERE p.claim_id = c.claim_id)
+            AND NOT EXISTS (SELECT 1 FROM claim_variants v WHERE v.claim_id = c.claim_id AND v.source_id = :src)`,
+        { id: match.claimId, src: ctx.sourceId }
+      );
+      if (legacy) {
+        const parent = await chooseParent(db, match.claimId, ctx.sourceId, best.text);
+        const added = await db.exec(
+          `BEGIN
+             add_claim_variant(p_claim_id => :claim_id, p_source_id => :source_id, p_parent_variant_id => :parent_id,
+               p_variant_text => :text, p_actor => :actor, p_action => :action, p_location_name => :location,
+               p_event_name => :event, p_quantity_value => :quantity, p_certainty => :certainty,
+               p_attribution => :attribution, p_match_score => :score, p_match_method => 'RULE_STRONG',
+               p_lineage_basis => :basis, p_match_breakdown => :breakdown, o_variant_id => :variant_id,
+               p_evidence_id => :evidence_id, p_extraction_basis => 'HEADLINE_FALLBACK');
+           END;`,
+          {
+            claim_id: match.claimId, source_id: ctx.sourceId, parent_id: parent.parentId, text: best.text,
+            actor: analysis.actor, action: analysis.action, location: analysis.location, event: analysis.event,
+            quantity: analysis.quantity, certainty: analysis.certainty, attribution: ctx.publisher,
+            score: match.score.total, basis: parent.basis, breakdown: describeBreakdown(match.score.parts),
+            variant_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, evidence_id: best.evidenceId,
+          }
+        );
+        await applySourceDependence(db, ctx.sourceId);
+        result.claims.push({ claimId: match.claimId, newClaim: false, method: 'RULE_STRONG', variantId: added.outBinds.variant_id });
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Store a newly fetched item and analyse it.
+ *
+ * options: platformId, ingestionSourceId, categoryId, origin ('AUTOMATED' feeds |
+ *          'WEB_SEARCH'), originLabel, dictionary, runId, hypothesis, scorer,
+ *          page (extracted page or null), searchSnippet
  */
 export async function processSourceItem(db, item, options) {
   const {
     platformId, ingestionSourceId = null, categoryId, origin = 'AUTOMATED',
-    originLabel = 'automated source', dictionary, requireClaimSignal = false,
+    originLabel = 'automated source', dictionary, runId = null, hypothesis = null, scorer = null,
+    page = null, searchSnippet = null,
   } = options;
 
   const ins = await db.exec(
@@ -196,126 +496,68 @@ export async function processSourceItem(db, item, options) {
   const sourceId = ins.outBinds.id;
   if (!sourceId) return { status: 'SKIPPED' };
 
-  // Explicit references to sources that are already stored
   const referencesAdded = await recordReferences(db, sourceId, {
     links: item.outboundLinks || [],
     canonicalUrl: item.canonicalUrl,
     url: item.url,
   });
 
-  const analysis = analyseItem(item, dictionary);
-  const best = await findBestClaim(db, analysis);
-  const bestScore = best ? best.score.total : 0;
-  const method = best ? classify(bestScore) : 'NEW_CLAIM';
-
-  if (method === 'NEW_CLAIM' && requireClaimSignal && !hasClaimSignal(analysis)) {
-    // Stored and searchable, but not forced into a claim family.
-    for (const cand of analysis.candidates) {
-      await db.exec(`BEGIN record_entity_candidate(:text, :source_id); END;`, { text: cand, source_id: sourceId });
-    }
-    return { status: 'INSERTED', sourceId, claimId: null, method: 'UNMATCHED', score: bestScore, referencesAdded };
-  }
-
-  let claimId;
-  let breakdown;
-  if (method === 'NEW_CLAIM') {
-    const created = await db.exec(
-      `INSERT INTO claims (canonical_claim, category_id, status, claim_origin, summary)
-       VALUES (:text, :category_id, 'CANDIDATE', 'AUTOMATED', :summary)
-       RETURNING claim_id INTO :claim_id`,
-      {
-        text: item.title.slice(0, 500),
-        category_id: categoryId,
-        summary: `Candidate claim created automatically from ${originLabel}.`.slice(0, 1000),
-        claim_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-      }
-    );
-    claimId = created.outBinds.claim_id[0];
-    // Only fields that can be inferred deterministically are filled;
-    // sentiment, emotional hook and manipulation marker stay NULL.
-    await db.exec(
-      `INSERT INTO fingerprints (claim_id, core_assertion, source_pattern, notes, is_curated)
-       VALUES (:claim_id, :core, :pattern, :notes, 'N')`,
-      {
-        claim_id: claimId,
-        core: item.title.slice(0, 500),
-        pattern: `First retrieved from ${originLabel}`.slice(0, 200),
-        notes: 'Not yet curated. Only deterministic fields were filled automatically.',
-      }
-    );
-    breakdown = best
-      ? `New claim. Best existing match was claim #${best.claimId} at ${bestScore} (${describeBreakdown(best.score.parts)}).`
-      : 'New claim. No existing claim shared an entity or keyword.';
-  } else {
-    claimId = best.claimId;
-    breakdown = describeBreakdown(best.score.parts);
-  }
-
-  // Wording parent: explicit reference > inferred (lexical) predecessor > none
-  const parent = method === 'NEW_CLAIM'
-    ? { parentId: null, basis: 'NONE' }
-    : await chooseParent(db, claimId, sourceId, item.title.slice(0, 1000));
-
-  const added = await db.exec(
-    `BEGIN
-       add_claim_variant(
-         p_claim_id => :claim_id, p_source_id => :source_id, p_parent_variant_id => :parent_id,
-         p_variant_text => :text, p_actor => :actor, p_action => :action,
-         p_target_object => NULL, p_location_name => :location, p_event_name => :event,
-         p_claimed_date => NULL, p_quantity_value => :quantity, p_certainty => :certainty,
-         p_attribution => :attribution, p_match_score => :score, p_match_method => :method,
-         p_lineage_basis => :basis, p_match_breakdown => :breakdown, o_variant_id => :variant_id);
-     END;`,
-    {
-      claim_id: claimId,
-      source_id: sourceId,
-      parent_id: parent.parentId,
-      text: item.title.slice(0, 1000),
-      actor: analysis.actor,
-      action: analysis.action,
-      location: analysis.location,
-      event: analysis.event,
-      quantity: analysis.quantity,
-      certainty: analysis.certainty,
-      attribution: item.publisher,
-      score: bestScore,
-      method,
-      basis: parent.basis,
-      breakdown: breakdown.slice(0, 400),
-      variant_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-    }
-  );
-
-  // Known upstream source (explicit evidence in the same claim family only)
-  const upstream = await applySourceDependence(db, sourceId);
-
-  // Only new claims and strong matches extend the claim's entities/keywords.
-  // A candidate match is attached but must not widen the family, otherwise
-  // loosely related items would gradually pull more unrelated items in.
-  if (method !== 'RULE_CANDIDATE') {
-    for (const ent of analysis.entities) {
-      await db.exec(`BEGIN link_claim_entity(:claim_id, :entity_id, 'DICTIONARY'); END;`, { claim_id: claimId, entity_id: ent.entityId });
-    }
-    const keywordTexts = new Set(analysis.keywords.map((k) => k.text));
-    if (method === 'NEW_CLAIM') analysis.autoTerms.forEach((t) => keywordTexts.add(t));
-    for (const kw of keywordTexts) {
-      await db.exec(`BEGIN link_claim_keyword(:claim_id, :kw, 'AUTO'); END;`, { claim_id: claimId, kw });
-    }
-  }
-  for (const cand of analysis.candidates) {
-    await db.exec(`BEGIN record_entity_candidate(:text, :source_id); END;`, { text: cand, source_id: sourceId });
-  }
+  const analysis = await analyseSourceEvidence(db, {
+    sourceId,
+    runId,
+    input: {
+      blocks: page?.blocks || null,
+      // feeds: the item's own description; web results without a fetched page:
+      // only the search snippet (labelled SEARCH_SNIPPET, not page text)
+      text: page || searchSnippet ? null : item.snippet,
+      description: page?.description || null,
+      snippet: searchSnippet,
+      title: item.title,
+    },
+    page: { title: item.title, publisher: item.publisher, url: item.url },
+    hypothesis,
+    scorer,
+    dictionary,
+    categoryId,
+    originLabel,
+    publisher: item.publisher,
+    publishedAt: item.publishedAt,
+  });
 
   return {
     status: 'INSERTED',
     sourceId,
-    claimId,
-    variantId: added.outBinds.variant_id,
-    method,
-    score: bestScore,
-    newClaim: method === 'NEW_CLAIM',
-    lineageBasis: parent.basis,
-    upstreamSourceId: upstream || null,
-    referencesAdded,
+    claims: analysis.claims,
+    evidenceCount: analysis.evidenceCount,
+    referencesAdded: referencesAdded + analysis.referencesAdded,
   };
+}
+
+/** Re-read an already stored source for a new investigation (no refetch). */
+export async function analyseStoredSource(db, sourceId, options) {
+  const src = await db.one(
+    `SELECT source_id, source_title, source_url, publisher, snippet, published_at FROM sources WHERE source_id = :id`,
+    { id: sourceId }
+  );
+  if (!src) return { claims: [], evidenceCount: 0, referencesAdded: 0 };
+  const lines = String(src.snippet || '').split('\n').filter(Boolean);
+  return analyseSourceEvidence(db, {
+    sourceId,
+    runId: options.runId,
+    input: {
+      blocks: lines.length > 1 ? lines : null,
+      text: lines.length > 1 ? null : src.snippet,
+      description: null,
+      snippet: options.searchSnippet || null,
+      title: src.source_title,
+    },
+    page: { title: src.source_title, publisher: src.publisher, url: src.source_url },
+    hypothesis: options.hypothesis,
+    scorer: options.scorer,
+    dictionary: options.dictionary,
+    categoryId: options.categoryId,
+    originLabel: options.originLabel,
+    publisher: src.publisher,
+    publishedAt: src.published_at,
+  });
 }

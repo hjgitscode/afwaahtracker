@@ -21,6 +21,8 @@ router.put('/claims/:id', requireAdmin, h(claims.update));
 router.delete('/claims/:id', requireAdmin, h(claims.remove));
 router.get('/claims/:id/sources', h(claims.sources));
 router.get('/claims/:id/variants', h(claims.variants));
+router.get('/claims/:id/evidence', h(claims.evidence));
+router.get('/claims/:id/investigation', h(claims.investigation));
 router.post('/claims/:id/variants', requireAdmin, h(claims.addVariant));
 router.get('/claims/:id/mutations', h(claims.mutations));
 router.get('/claims/:id/claim-lineage', h(claims.claimLineage));

@@ -3,7 +3,7 @@ import { ArrowRight } from 'lucide-react';
 import Badge, { StatusBadge, OriginBadge } from '../ui/Badge.jsx';
 import { EchoBar, EchoTooltip } from '../ui/EchoMeter.jsx';
 import { formatDate, formatPercent } from '../../utils/format.js';
-import { echoLabel, isDemo } from '../../utils/labels.js';
+import { echoLabel, isDemo, RELATIONSHIP_LABEL } from '../../utils/labels.js';
 
 function Stat({ label, value }) {
   return (
@@ -18,7 +18,8 @@ function Stat({ label, value }) {
  * One claim family in a result list. Deliberately limited to the canonical
  * claim and its headline numbers; everything else is on the claim page.
  */
-export default function ClaimCard({ claim }) {
+export default function ClaimCard({ claim, runId = null }) {
+  const relation = RELATIONSHIP_LABEL[claim.relationship_to_query];
   const demo = isDemo(claim.claim_origin);
   const high = Number(claim.echo_ratio) > 60;
   return (
@@ -26,13 +27,13 @@ export default function ClaimCard({ claim }) {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <StatusBadge status={claim.status} />
         <OriginBadge origin={claim.claim_origin} />
-        {claim.strong_family === 'N' && <Badge tone="muted" title="Only one retrieved source belongs to this family">Single source</Badge>}
+        {relation && <Badge tone={relation[1]}>{relation[0]}</Badge>}
       </div>
       <h3 className="text-[19px] font-extrabold leading-snug tracking-[-0.01em] text-ink">{claim.canonical_claim}</h3>
 
       <div className="mt-5 grid grid-cols-3 gap-3">
         <Stat label="Sources" value={claim.number_of_sources} />
-        <Stat label={demo ? 'Derived' : 'Known upstream'} value={claim.number_of_derived_sources} />
+        <Stat label="Evidence" value={claim.evidence_count ?? 0} />
         <Stat label="Platforms" value={claim.number_of_platforms} />
       </div>
 
@@ -49,7 +50,7 @@ export default function ClaimCard({ claim }) {
       </div>
 
       <div className="mt-auto pt-6">
-        <Link to={`/claims/${claim.claim_id}`} className="btn btn-primary w-full sm:w-auto" aria-label={`Investigate: ${claim.canonical_claim}`}>
+        <Link to={runId ? `/claims/${claim.claim_id}?run=${runId}` : `/claims/${claim.claim_id}`} className="btn btn-primary w-full sm:w-auto" aria-label={`Investigate: ${claim.canonical_claim}`}>
           Investigate <ArrowRight size={16} strokeWidth={2.6} />
         </Link>
       </div>
