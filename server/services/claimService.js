@@ -46,7 +46,9 @@ const toDate = (v) => {
  * publisher, an entity alias or a keyword of the claim.
  */
 function buildClaimFilter(params) {
-  const where = [];
+  // Title-made families merged into a proposition-based family are kept for
+  // history (claim page) but never listed as families of their own
+  const where = [`o.status <> 'MERGED'`];
   const binds = {};
   const relevance = [];
 
@@ -180,7 +182,7 @@ export async function listClaims(params = {}) {
 export async function getClaim(id) {
   return withConnection(async (db) => {
     const claim = await db.one(
-      `SELECT o.*, c.summary,
+      `SELECT o.*, c.summary, c.merged_into_claim_id,
               ci.claim_type, ci.subject, ci.predicate, ci.object, ci.qualifier, ci.temporal_scope,
               ci.normalized_signature, ci.evidence_count, ci.known_upstream_count, ci.known_echo_ratio,
               ci.mutation_count, ci.variant_count,
@@ -357,6 +359,9 @@ export async function getClaimLineage(id) {
  */
 export async function getSourceLineage(id) {
   await assertClaim(id);
+  // Nodes: the claim's sources, every known upstream ancestor
+  // (SOURCES.derived_from_source_id) and every source they reference
+  // (SOURCE_REFERENCES: hyperlink, submitted link, canonical, attribution)
   const nodes = await query(
     `WITH claim_sources AS (
          SELECT DISTINCT source_id FROM claim_variants WHERE claim_id = :id
@@ -366,6 +371,12 @@ export async function getSourceLineage(id) {
            FROM sources s
           START WITH s.source_id IN (SELECT source_id FROM claim_sources)
         CONNECT BY NOCYCLE s.source_id = PRIOR s.derived_from_source_id
+     ),
+     graph AS (
+         SELECT source_id FROM ancestry
+         UNION
+         SELECT r.to_source_id FROM source_references r
+          WHERE r.from_source_id IN (SELECT source_id FROM claim_sources)
      )
      SELECT s.source_id, s.derived_from_source_id, s.publisher, s.source_title, s.source_url,
             s.published_at, s.origin_type, s.provenance_note, p.platform_name,
@@ -374,17 +385,95 @@ export async function getSourceLineage(id) {
             CASE WHEN s.source_id IN (SELECT source_id FROM claim_sources) THEN 'Y' ELSE 'N' END AS in_claim,
             (SELECT COUNT(*) FROM sources c WHERE c.derived_from_source_id = s.source_id) AS child_count
        FROM sources s
-       JOIN ancestry a          ON a.source_id = s.source_id
+       JOIN graph g             ON g.source_id = s.source_id
        JOIN platforms p         ON p.platform_id = s.platform_id
        LEFT JOIN vw_source_lineage l ON l.source_id = s.source_id
-      ORDER BY l.lineage_depth, s.published_at NULLS LAST`,
+      ORDER BY l.lineage_depth NULLS LAST, s.published_at NULLS LAST`,
+    { id }
+  );
+  // Edges: upstream source -> dependent source. A SOURCE_REFERENCES row is the
+  // evidence (its type labels the edge); the known-upstream shortcut is shown
+  // where no reference row explains it (curated demo provenance).
+  const refs = await query(
+    `SELECT r.from_source_id, r.to_source_id, r.reference_type
+       FROM source_references r
+      WHERE r.from_source_id IN (SELECT source_id FROM claim_variants WHERE claim_id = :id)
+         OR r.to_source_id   IN (SELECT source_id FROM claim_variants WHERE claim_id = :id)
+      ORDER BY r.from_source_id, r.to_source_id`,
     { id }
   );
   const ids = new Set(nodes.map((n) => n.source_id));
-  const edges = nodes
-    .filter((n) => n.derived_from_source_id && ids.has(n.derived_from_source_id))
-    .map((n) => ({ source: n.derived_from_source_id, target: n.source_id }));
+  const edges = [];
+  const seen = new Set();
+  for (const r of refs) {
+    const key = `${r.to_source_id}>${r.from_source_id}`;
+    if (!ids.has(r.to_source_id) || !ids.has(r.from_source_id) || seen.has(key)) continue;
+    seen.add(key);
+    edges.push({ source: r.to_source_id, target: r.from_source_id, kind: r.reference_type });
+  }
+  for (const n of nodes) {
+    const key = `${n.derived_from_source_id}>${n.source_id}`;
+    if (n.derived_from_source_id && ids.has(n.derived_from_source_id) && !seen.has(key)) {
+      seen.add(key);
+      edges.push({ source: n.derived_from_source_id, target: n.source_id, kind: 'KNOWN_UPSTREAM' });
+    }
+  }
   return { nodes, edges };
+}
+
+/**
+ * Novelty diagnostics for one claim family, counted in Oracle
+ * (VW_CLAIM_NOVELTY_DIAGNOSTICS), plus the pipeline stages recorded by the
+ * investigations that touched it (SEARCH_RUN_STAGES).
+ */
+export async function getNoveltyDiagnostics(id) {
+  await assertClaim(id);
+  return withConnection(async (db) => {
+    const d = await db.one('SELECT * FROM vw_claim_novelty_diagnostics WHERE claim_id = :id', { id });
+    const runs = await db.rows(
+      `SELECT DISTINCT l.search_run_id
+         FROM search_result_links l
+        WHERE l.source_id IN (SELECT source_id FROM claim_variants WHERE claim_id = :id)
+        ORDER BY l.search_run_id DESC
+        FETCH FIRST 5 ROWS ONLY`,
+      { id }
+    );
+    const stages = runs.length
+      ? await db.rows(
+        `SELECT search_run_id, stage_code, items_examined, rows_written, detail
+           FROM search_run_stages
+          WHERE search_run_id IN (SELECT column_value FROM TABLE(sys.odcinumberlist(${runs.map((r) => Number(r.search_run_id)).join(',')})))
+          ORDER BY search_run_id DESC, stage_order`
+      )
+      : [];
+    return { claimId: id, ...diagnosticsShape(d), stages };
+  });
+}
+
+/** Oracle row (VW_CLAIM_NOVELTY_DIAGNOSTICS) -> API shape. */
+export function diagnosticsShape(d) {
+  const n = (v) => Number(v || 0);
+  return {
+    status: d.status,
+    mergedIntoClaimId: d.merged_into_claim_id || null,
+    hasProposition: d.has_proposition === 'Y',
+    normalizedSignature: d.normalized_signature || null,
+    sourceCount: n(d.source_count),
+    datedSourceCount: n(d.dated_source_count),
+    evidenceCount: n(d.evidence_count),
+    storedSentenceCount: n(d.stored_sentence_count),
+    variantCount: n(d.variant_count),
+    variantsWithEvidence: n(d.variants_with_evidence),
+    structuredVariantCount: n(d.structured_variant_count),
+    variantsWithParent: n(d.variants_with_parent),
+    claimLineageEdges: n(d.claim_lineage_edges),
+    mutationCount: n(d.mutation_count),
+    sourceReferenceCount: n(d.source_reference_count),
+    inFamilyReferenceCount: n(d.in_family_reference_count),
+    sourcesWithKnownUpstream: n(d.sources_with_known_upstream),
+    sourceLineageEdges: n(d.source_lineage_edges),
+    knownEchoRatio: d.known_echo_ratio === null || d.known_echo_ratio === undefined ? null : Number(d.known_echo_ratio),
+  };
 }
 
 async function assertClaim(id) {

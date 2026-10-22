@@ -14,10 +14,16 @@
  *   7. per result, ONE transaction: store source, evidence sentences,
  *      structured proposition, claim family, variant, Mutation Ledger,
  *      references (see ingestion/sourceProcessor.js)
- *   8. relationship pass: links between pages stored in the same run
+ *   8. provenance pass over every source of the run: hyperlinks, canonical
+ *      links and "according to / via / reported by / citing X" attributions
+ *      -> SOURCE_REFERENCES (only to a stored source in the same family)
+ *   8b. FINALISE_CLAIM_LINEAGE per touched family: known upstream sources,
+ *      wording parents in publication order, Mutation Ledger rebuilt
  *   9. RECORD_SEARCH_CLAIM_MATCHES: how each claim family found relates to
  *      the hypothesis (EXACT / DIFFERENT_VALUE / RELATED / TOPICAL)
  *  10. FINISH_WEB_SEARCH_RUN with the counts                  (COMMIT)
+ * Every stage writes one SEARCH_RUN_STAGES row (items examined, rows written)
+ * so a zero can be told apart from a stage that never ran.
  *
  * Without TAVILY_API_KEY the run is recorded as FAILED with a clear
  * message, and the caller still shows the sources stored in Oracle.
@@ -26,7 +32,7 @@ import { withConnection, withTransaction, oracledb } from '../db/pool.js';
 import config from '../config/index.js';
 import { HttpError, ValidationError } from '../middleware/errors.js';
 import { mapLimit } from '../ingestion/http.js';
-import { normaliseUrl, makeItem, domainOf, cleanText } from '../ingestion/normalizer.js';
+import { normaliseUrl, makeItem, domainOf, cleanText, dateFromUrl } from '../ingestion/normalizer.js';
 import { loadDictionary } from '../ingestion/entityMatcher.js';
 import { processSourceItem, analyseStoredSource, recordReferences, refreshLineage } from '../ingestion/sourceProcessor.js';
 import { parseQuery } from '../claims/hypothesis.js';
@@ -162,23 +168,20 @@ async function recordClaimMatches(runId, h) {
   });
 }
 
+/** One SEARCH_RUN_STAGES row: what a stage examined and what it wrote. */
+async function recordStage(runId, stage, examined, written, detail = null) {
+  await withTransaction((db) =>
+    db.exec(`BEGIN record_run_stage(:id, :stage, :ex, :wr, :detail); END;`, {
+      id: runId, stage, ex: examined || 0, wr: written || 0, detail,
+    })
+  ).catch((e) => console.error('[web-search] stage', stage, e.message));
+}
+
 async function linkResult(db, runId, sourceId, result, duplicate) {
   await db.exec(
     `BEGIN record_search_result_link(:run, :src, :rank, :provider, :snippet, :dup); END;`,
     { provider: result.provider || providerName(), run: runId, src: sourceId, rank: result.rank, snippet: result.snippet, dup: duplicate ? 'Y' : 'N' }
   );
-}
-
-/**
- * A publication date written into the address itself ("/2025/10/25/",
- * "/2025-10-25/"), used only when neither the page nor the search result
- * states one. Day and month must be valid; nothing else is guessed.
- */
-function dateFromUrl(url) {
-  const m = /\/(20\d{2})[/-](0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])(?:\/|-|\.|$)/.exec(String(url || ''));
-  if (!m) return null;
-  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  return d.getUTCDate() === Number(m[3]) && d <= new Date() ? d : null;
 }
 
 /** Builds the stored item from the search result and (when available) the page. */
@@ -238,6 +241,7 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
     setStage(state, 'SEARCHING');
     const results = await searchWeb(query);
     counts.resultsReceived = results.length;
+    await recordStage(runId, 'SEARCH', 1, results.length, `${providerName()} returned ${results.length} results`);
 
     // 3. Normalise + in-batch duplicates
     setStage(state, 'NORMALISING');
@@ -267,6 +271,8 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
       if (!r.existingId) fresh.push(r);
       else counts.duplicatesSkipped += 1;
     }
+    await recordStage(runId, 'NORMALISE', results.length, unique.length,
+      `${unique.length} unique URLs; ${unique.length - fresh.length} already stored in Oracle`);
 
     // 5 + 6. Fetch and extract new pages
     setStage(state, 'FETCHING');
@@ -284,8 +290,21 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
       }
     });
 
+    await recordStage(runId, 'FETCH', fresh.length, counts.pagesFetched,
+      `${counts.pagesFetched} pages fetched; ${counts.pagesFailed} fell back to the search title and snippet`);
+
     // 7. One transaction per result
     setStage(state, 'MATCHING');
+    const tally = { sources: 0, evidence: 0, sentences: 0, propositions: 0, variants: 0, superseded: 0, linkRefs: 0 };
+    const runSources = []; // every source of this run, for the provenance pass
+    const addTally = (res) => {
+      tally.sources += 1;
+      tally.evidence += res.evidenceCount || 0;
+      tally.sentences += res.sentencesExamined || 0;
+      tally.propositions += res.propositions || 0;
+      tally.variants += res.variantsAdded || 0;
+      tally.superseded += res.superseded || 0;
+    };
     const helpers = makeEntityHelpers(dictionary, hypothesis);
     const scorer = makeScorer({ hypothesis, query, aliasesFor: helpers.aliasesFor });
     const claimIds = new Set();
@@ -301,7 +320,6 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
     const platforms = await withConnection((db) => db.rows('SELECT platform_id, platform_name FROM platforms'));
     const platformId = (name) => (platforms.find((p) => p.platform_name === name) || platforms.find((p) => p.platform_name === 'Web Page'))?.platform_id;
     const general = await withConnection((db) => db.one(`SELECT category_id FROM categories WHERE category_name = 'General'`));
-    const stored = [];
     const baseOptions = () => ({
       categoryId: general?.category_id || 9,
       originLabel: 'live web search',
@@ -318,6 +336,8 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
           await linkResult(db, runId, r.existingId, r, true);
           return analyseStoredSource(db, r.existingId, { ...baseOptions(), searchSnippet: r.snippet });
         });
+        addTally(res);
+        runSources.push({ sourceId: r.existingId, item: null, searchSnippet: r.snippet });
         await noteClaims(res.claims);
       } catch (e) {
         counts.itemErrors += 1;
@@ -347,7 +367,7 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
             const row = await db.one(`SELECT find_source_id(:u, :c) AS id FROM dual`, { u: item.url, c: item.canonicalUrl });
             if (row?.id) {
               await linkResult(db, runId, row.id, r, true);
-              out.claims = (await analyseStoredSource(db, row.id, { ...baseOptions(), searchSnippet: r.snippet })).claims;
+              Object.assign(out, await analyseStoredSource(db, row.id, { ...baseOptions(), searchSnippet: r.snippet }), { sourceId: row.id });
             }
           } else {
             await linkResult(db, runId, out.sourceId, r, false);
@@ -355,13 +375,16 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
           return out;
         });
         await noteClaims(res.claims);
+        addTally(res);
+        tally.linkRefs += res.linkReferences || 0;
         if (res.status === 'SKIPPED') {
           counts.duplicatesSkipped += 1;
+          if (res.sourceId) runSources.push({ sourceId: res.sourceId, item: null, searchSnippet: r.snippet });
           continue;
         }
         counts.sourcesInserted += 1;
         counts.referencesFound += res.referencesAdded || 0;
-        stored.push({ sourceId: res.sourceId, item, attributions: detectAttributions(page?.text || '') });
+        runSources.push({ sourceId: res.sourceId, item, searchSnippet: r.snippet });
       } catch (e) {
         counts.itemErrors += 1;
         error = error || `Result ${r.rank} (${domainOf(r.url)}): ${e.message.split('\n')[0]}`;
@@ -369,23 +392,43 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
       }
     }
 
-    // 8. Links between pages that were stored in this same run
+    await recordStage(runId, 'EVIDENCE', tally.sources, tally.evidence,
+      `${tally.evidence} evidence sentences selected from ${tally.sources} sources (SOURCE_EVIDENCE)`);
+    await recordStage(runId, 'PROPOSITIONS', tally.sentences, tally.propositions,
+      `${tally.propositions} structured propositions extracted from ${tally.sentences} evidence sentences`);
+    await recordStage(runId, 'VARIANTS', tally.propositions, tally.variants,
+      `${tally.variants} new claim variants; ${claimIds.size} claim families touched`);
+    await recordStage(runId, 'SUPERSEDE', tally.sources, tally.superseded,
+      `${tally.superseded} variants moved out of older title-made families`);
+
+    // 8. Provenance for EVERY source of the run (new and already stored):
+    //    hyperlinks and canonical links between pages stored in this run, and
+    //    "according to X" / "via X" / "reported by X" ... in the stored page
+    //    text, the search snippet and the title, now that the whole run is in
+    //    Oracle (a credited publisher may have been stored after the citing page)
     setStage(state, 'RELATIONSHIPS');
-    for (const s of stored) {
-      if (!s.item.outboundLinks.length && !s.item.canonicalUrl && !s.attributions.length) continue;
+    let refsAdded = tally.linkRefs;
+    let attributionNames = 0;
+    for (const s of runSources) {
       try {
         await withTransaction(async (db) => {
-          let added = await recordReferences(db, s.sourceId, {
-            links: s.item.outboundLinks, canonicalUrl: s.item.canonicalUrl, url: s.item.url,
-          });
-          // "according to X" where X's page was stored later in this run
-          for (const name of s.attributions) {
+          let added = 0;
+          if (s.item && (s.item.outboundLinks.length || s.item.canonicalUrl)) {
+            added += await recordReferences(db, s.sourceId, {
+              links: s.item.outboundLinks, canonicalUrl: s.item.canonicalUrl, url: s.item.url,
+            });
+          }
+          const src = await db.one('SELECT source_title, snippet FROM sources WHERE source_id = :id', { id: s.sourceId });
+          const names = detectAttributions([src?.source_title, src?.snippet, s.searchSnippet].filter(Boolean).join('\n'));
+          attributionNames += names.length;
+          for (const name of names) {
             const r = await db.exec(`BEGIN :n := record_attribution_reference(:s, :p); END;`, {
               n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, s: s.sourceId, p: name,
             });
             added += r.outBinds.n || 0;
           }
           if (added) {
+            refsAdded += added;
             counts.referencesFound += added;
             await refreshLineage(db, s.sourceId);
           }
@@ -394,16 +437,58 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
         error = error || `Relationship pass: ${e.message.split('\n')[0]}`;
       }
     }
+    const refRows = await withConnection((db) => db.one(
+      `SELECT COUNT(*) AS n FROM source_references
+        WHERE from_source_id IN (SELECT source_id FROM search_result_links WHERE search_run_id = :id)`,
+      { id: runId }
+    )).catch(() => null);
+    await recordStage(runId, 'REFERENCES', runSources.length, refRows ? refRows.n : refsAdded,
+      `Hyperlinks, canonical links and ${attributionNames} attribution phrases examined; `
+      + `${refRows ? refRows.n : refsAdded} SOURCE_REFERENCES rows from this run's sources (${refsAdded} added in this pass)`);
 
-    // 8b. Wording lineage depends on publication order, not on the order the
-    // results arrived: relink every claim family touched by this run
-    for (const claimId of claimIds) {
-      await withTransaction((db) => db.exec('BEGIN relink_claim_lineage(:id); END;', { id: claimId }))
+    // 8b. Per touched claim family, in Oracle (FINALISE_CLAIM_LINEAGE):
+    //     known upstream sources -> wording parents in publication order ->
+    //     Mutation Ledger rebuilt from the final parent links
+    const touched = [...claimIds];
+    for (const claimId of touched) {
+      await withTransaction((db) => db.exec('BEGIN finalise_claim_lineage(:id); END;', { id: claimId }))
         .catch((e) => { error = error || `Lineage pass: ${e.message.split('\n')[0]}`; });
+    }
+    if (touched.length) {
+      const list = `SELECT column_value FROM TABLE(sys.odcinumberlist(${touched.map(Number).join(',')}))`;
+      const fam = await withConnection(async (db) => ({
+        ...(await db.one(
+          `SELECT COUNT(DISTINCT v.source_id) AS sources,
+                  COUNT(DISTINCT CASE WHEN s.derived_from_source_id IS NOT NULL THEN v.source_id END) AS upstream,
+                  COUNT(CASE WHEN v.parent_variant_id IS NOT NULL THEN 1 END) AS parents,
+                  COUNT(DISTINCT CASE WHEN s.published_at IS NOT NULL THEN v.source_id END) AS dated
+             FROM claim_variants v JOIN sources s ON s.source_id = v.source_id
+            WHERE v.claim_id IN (${list})`
+        )),
+        mutations: (await db.one(`SELECT COUNT(*) AS n FROM claim_mutations WHERE claim_id IN (${list})`)).n,
+      })).catch((e) => {
+        error = error || `Stage counts: ${e.message.split('\n')[0]}`;
+        return null;
+      });
+      if (fam) {
+        await recordStage(runId, 'PROVENANCE', fam.sources, fam.upstream,
+          `${fam.upstream} of ${fam.sources} sources in the touched families have a known upstream source`);
+        await recordStage(runId, 'LINEAGE', touched.length, fam.parents,
+          `${fam.parents} variants have a parent; ${fam.dated} of ${fam.sources} sources have a publication date`);
+        await recordStage(runId, 'MUTATIONS', touched.length, fam.mutations,
+          `GENERATE_MUTATION_LEDGER rebuilt for ${touched.length} claim families`);
+      }
+    } else {
+      await recordStage(runId, 'PROVENANCE', 0, 0, 'No claim family was touched by this run');
+      await recordStage(runId, 'LINEAGE', 0, 0, 'No claim family was touched by this run');
+      await recordStage(runId, 'MUTATIONS', 0, 0, 'No claim family was touched by this run');
     }
 
     // 9. Relate the claim families found to what was asked (in Oracle)
     await recordClaimMatches(runId, hypothesis);
+    const m = await withConnection((db) => db.one('SELECT COUNT(*) AS n FROM search_claim_matches WHERE search_run_id = :id', { id: runId }))
+      .catch(() => null);
+    await recordStage(runId, 'MATCHES', touched.length, m?.n || 0, `${m?.n || 0} SEARCH_CLAIM_MATCHES rows`);
 
     // Failed pages still produce sources (search title + snippet), so the run is PARTIAL
     if (counts.itemErrors || counts.pagesFailed) status = 'PARTIAL';

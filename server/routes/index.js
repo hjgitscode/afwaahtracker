@@ -27,6 +27,7 @@ router.post('/claims/:id/variants', requireAdmin, h(claims.addVariant));
 router.get('/claims/:id/mutations', h(claims.mutations));
 router.get('/claims/:id/claim-lineage', h(claims.claimLineage));
 router.get('/claims/:id/source-lineage', h(claims.sourceLineage));
+router.get('/claims/:id/novelty-diagnostics', h(claims.noveltyDiagnostics));
 
 router.get('/sources', h(sources.list));
 router.post('/sources', requireAdmin, h(sources.create));
@@ -45,6 +46,7 @@ router.post('/investigate-web', investigateLimiter, investigationQuota, h(web.in
 router.get('/web-search', h(web.list));
 router.get('/web-search/:runId/status', h(web.status));
 router.get('/web-search/:runId/results', h(web.results));
+router.get('/web-search/:runId/novelty-diagnostics', h(web.diagnostics));
 
 router.get('/lab', h(meta.lab));
 router.get('/lab/queries/:key', h(meta.labQuery));

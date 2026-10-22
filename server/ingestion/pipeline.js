@@ -66,6 +66,7 @@ export async function runSource(source) {
     let dictionary = await withConnection((db) => loadDictionary(db));
     // Remove duplicates inside one batch before touching the database
     const seen = new Set();
+    const touched = new Set();
     for (const item of items) {
       if (seen.has(item.url)) {
         counts.skipped += 1;
@@ -77,6 +78,7 @@ export async function runSource(source) {
         if (res.status === 'SKIPPED') counts.skipped += 1;
         else {
           counts.inserted += 1;
+          for (const c of res.claims) touched.add(c.claimId);
           if (res.claims.some((c) => !c.newClaim)) counts.matched += 1;
           // entities/keywords of a newly created claim must be visible to the next items
           if (res.claims.some((c) => c.newClaim)) dictionary = await withConnection((db) => loadDictionary(db, { force: true }));
@@ -86,6 +88,12 @@ export async function runSource(source) {
         errorMessage = errorMessage || `Item "${item.title.slice(0, 60)}": ${err.message.split('\n')[0]}`;
         if (err.code === 'DB_UNAVAILABLE') throw err;
       }
+    }
+    // Known upstream sources, wording parents and Mutation Ledger of every
+    // family this batch touched, in publication order (FINALISE_CLAIM_LINEAGE)
+    for (const claimId of touched) {
+      await withTransaction((db) => db.exec('BEGIN finalise_claim_lineage(:id); END;', { id: claimId }))
+        .catch((err) => { errorMessage = errorMessage || `Lineage pass: ${err.message.split('\n')[0]}`; });
     }
     if (counts.errors) status = counts.inserted || counts.skipped ? 'PARTIAL' : 'FAILED';
   } catch (err) {

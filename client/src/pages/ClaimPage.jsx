@@ -127,11 +127,11 @@ function Lineage({ id, kind, demo }) {
   return (
     <Card>
       <CardHeader
-        label={claim ? 'CLAIM_VARIANTS.parent_variant_id' : 'SOURCES.derived_from_source_id'}
+        label={claim ? 'CLAIM_VARIANTS.parent_variant_id' : 'SOURCE_REFERENCES + SOURCES.derived_from_source_id'}
         title={claim ? 'Claim lineage' : 'Source lineage'}
         subtitle={claim
-          ? (demo ? 'How the wording changed from version to version.' : 'Parent wording from an explicit reference, otherwise the most similar earlier version (dashed: inferred predecessor).')
-          : (demo ? 'Which sources are known to derive from which.' : 'Only explicit evidence — a hyperlink or submitted link to a stored source — creates a link.')}
+          ? (demo ? 'How the wording changed from version to version.' : 'Parent wording from a link or credit to a source in this family, otherwise the closest earlier dated version (dashed: inferred predecessor).')
+          : (demo ? 'Which sources are known to derive from which.' : 'Only explicit evidence creates a link: a hyperlink, submitted or canonical link, or a credit such as “according to PTI” naming a stored source.')}
         icon={claim ? GitBranch : Network}
       />
       {state.error ? <ErrorState compact error={state.error} onRetry={state.reload} />
@@ -139,10 +139,10 @@ function Lineage({ id, kind, demo }) {
           : !state.data.edges.length ? (
             <EmptyState compact icon={claim ? GitBranch : Network} title={claim ? 'No parent wording known' : 'No known upstream links'}>
               {claim
-                ? 'No variant of this claim has an explicit reference or a sufficiently similar earlier version.'
+                ? 'No variant links to or credits another source of this family, and no version has an earlier dated version to follow. Undated sources are never given an inferred parent.'
                 : demo
                   ? 'No provenance is recorded between these sources.'
-                  : 'None of these sources links to another stored source. That does not prove they are independent.'}
+                  : 'Reference detection ran: none of these sources links to or credits another stored source. That does not prove they are independent.'}
             </EmptyState>
           ) : (
             <>
@@ -190,6 +190,13 @@ export default function ClaimPage() {
       <Watermark word="TRACE" style={{ top: -20, right: -30 }} />
       {runId && <InvestigatedQuery id={id} runId={runId} />}
       <PageHeader crumbs={crumbs} label="Canonical claim" title={claim.canonical_claim}>
+        {claim.status === 'MERGED' && claim.merged_into_claim_id && (
+          <p className="mt-3 inline-block rounded-lg border border-line bg-white/70 px-3 py-1.5 text-[13.5px] font-semibold text-ink-2">
+            An earlier title-made family. Its sources now belong to{' '}
+            <Link className="text-primary underline" to={`/claims/${claim.merged_into_claim_id}`}>claim #{claim.merged_into_claim_id}</Link>,
+            identified from their evidence sentences.
+          </p>
+        )}
         <Proposition claim={claim} />
         <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-[15px] text-ink-2">
           <StatusBadge status={claim.status} />

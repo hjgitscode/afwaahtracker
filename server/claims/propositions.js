@@ -302,9 +302,17 @@ export { DATE_RE };
 
 // A quantity needs a unit or a sign; a bare year ("2026") is a date, not a quantity
 const QUANTITY_RE = /(?:[$₹€£]\s?\d[\d,.]*(?:\s*(?:million|billion|crore|lakh|thousand))?|\b\d[\d,.]*\s*(?:%|percent|per\s+cent|minutes?|hours?|days?|weeks?|months?|years?|million|billion|crore|lakh|thousand|people|users|students|employees|graduates|times|km|kg|tonnes?)\b)/i;
+// A count of things ("16 coaches", "12 districts"): a number that is not a
+// year, followed by a plural noun
+const COUNT_RE = /\b(\d{1,3}(?:,\d{3})+|\d{1,4})\s+(?!(?:years?|months?|weeks?|days?|hours?|minutes?)\b)([a-z]{3,}s)\b/;
 export function quantityOf(sentence) {
-  const m = QUANTITY_RE.exec(String(sentence || ''));
-  return m ? m[0].replace(/[,.]+$/, '').trim().slice(0, 80) : null;
+  const text = String(sentence || '');
+  const isYear = (n) => /^(1[89]|20)\d\d$/.test(n);
+  const m = QUANTITY_RE.exec(text);
+  if (m && !isYear(m[0].split(/\s/)[0])) return m[0].replace(/[,.]+$/, '').trim().slice(0, 80);
+  const c = COUNT_RE.exec(text);
+  if (c && !isYear(c[1])) return `${c[1]} ${c[2]}`;
+  return null;
 }
 
 const PERSON_ONLY = new RegExp(`^${PERSON_CORE}\\.?$`);

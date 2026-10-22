@@ -200,7 +200,7 @@ async function findPropositionClaim(db, keys) {
       WHERE p.subject_key = :sk
         AND p.predicate_code = :pred
         AND NVL(p.qualifier_key, '~') = NVL(:qk, '~')
-        AND NVL(p.temporal_scope, 'CURRENT') = NVL(:ts, 'CURRENT')
+        AND (p.claim_type = 'EVENT_ACTION' OR NVL(p.temporal_scope, 'CURRENT') = NVL(:ts, 'CURRENT'))
       ORDER BY CASE WHEN p.normalized_signature = :sig THEN 0 ELSE 1 END, p.claim_id
       FETCH FIRST 25 ROWS ONLY`,
     { sk: keys.subjectKey, pred: keys.predicate, qk: keys.qualifierKey, ts: keys.temporal, sig: keys.signature }
@@ -222,7 +222,7 @@ async function findPropositionClaim(db, keys) {
 
 /** Attach one extracted proposition (with its evidence) to a claim family. */
 async function attachProposition(db, prop, ev, ctx) {
-  const { sourceId, helpers, categoryId, originLabel, publisher, sentenceAnalysis } = ctx;
+  const { sourceId, helpers, categoryId, originLabel, sentenceAnalysis } = ctx;
   const subjectType = helpers.guessType(prop.subject, prop.subjectType);
   const subject = await resolveEntity(db, prop.subject, subjectType);
   if (!subject) return null;
@@ -251,7 +251,10 @@ async function attachProposition(db, prop, ev, ctx) {
     predicate: prop.predicate,
     objectKey: objectKey(prop, objectEntity ? `E${objectEntity.id}` : null),
     qualifierKey: qualifier ? `E${qualifier.id}` : null,
-    temporal: prop.temporal || null,
+    // "will launch" / "launched" are one event family: the variant's certainty
+    // records the difference (and the Mutation Ledger the change). Roles keep
+    // their temporal scope (a former Director is a different proposition).
+    temporal: prop.claimType === 'EVENT_ACTION' ? null : prop.temporal || null,
   };
   keys.signature = signatureOf(keys);
 
@@ -269,7 +272,7 @@ async function attachProposition(db, prop, ev, ctx) {
         sid: subject.id, stext: subject.name, skey: keys.subjectKey, pred: prop.predicate,
         oid: objectEntity?.id || null, otext: named.object, okey: keys.objectKey,
         qid: qualifier?.id || null, qtext: named.qualifier || null, qkey: keys.qualifierKey,
-        temporal: prop.temporal || null, sig: keys.signature, origin: originLabel,
+        temporal: keys.temporal, sig: keys.signature, origin: originLabel,
         claim_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
         created: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
       }
@@ -291,7 +294,9 @@ async function attachProposition(db, prop, ev, ctx) {
     // A place is recorded for location relations and events only; for roles a
     // place inside an organisation's name ("Vellore Institute ...") is not one
     location: prop.predicate === 'LOCATED_IN' ? named.object
-      : prop.claimType === 'EVENT_ACTION' ? prop.location || sentenceAnalysis.location : null,
+      // the place stated after the event ("in New Delhi"); a dictionary place
+      // inside a name ("Indian Railways") is not where the event happened
+      : prop.claimType === 'EVENT_ACTION' ? prop.location || null : null,
     relObject: named.object,
   };
   const parent = created ? { parentId: null, basis: 'NONE' } : await chooseParent(db, claimId, sourceId, ev.text, fields);
@@ -317,7 +322,11 @@ async function attachProposition(db, prop, ev, ctx) {
       parent_id: parent.parentId,
       text: ev.text,
       actor: subject.name,
-      action: sentenceAnalysis.action,
+      // the proposition's own verb for events; a role / location relation has
+      // no separate action (a headline-verb guess would show as a false mutation)
+      action: prop.claimType === 'EVENT_ACTION' && prop.verbBase
+        ? prop.verbBase.charAt(0).toUpperCase() + prop.verbBase.slice(1)
+        : null,
       // the event object is recorded once, as the structured relation object
       target: null,
       location: fields.location,
@@ -325,7 +334,9 @@ async function attachProposition(db, prop, ev, ctx) {
       claimed_date: fields.date,
       quantity: fields.quantity,
       certainty: prop.certainty,
-      attribution: attributions.length ? attributions.join(', ') : publisher,
+      // only what the text itself credits ("according to PTI"); the publisher
+      // is the source, not an attribution, so it is never compared as one
+      attribution: attributions.length ? attributions.join(', ') : null,
       score: match.score,
       method: match.method,
       basis: parent.basis,
@@ -341,6 +352,12 @@ async function attachProposition(db, prop, ev, ctx) {
     }
   );
 
+  // The proposition object key of this variant (as in the family signature):
+  // the Mutation Ledger compares objects by it, so rewording is not a mutation
+  await db.exec('UPDATE claim_variants SET relation_object_key = :k WHERE variant_id = :v', {
+    k: keys.objectKey, v: added.outBinds.variant_id,
+  });
+
   // Provenance: attributions to a stored publisher in the same family, then
   // the known upstream source (explicit evidence only)
   let referencesAdded = 0;
@@ -351,6 +368,7 @@ async function attachProposition(db, prop, ev, ctx) {
     referencesAdded += r.outBinds.n || 0;
   }
   const upstream = await applySourceDependence(db, sourceId);
+  const superseded = await supersedeLegacy(db, sourceId);
 
   // Entities: the proposition's own entities plus dictionary entities in the sentence
   const entityIds = new Set([subject.id, qualifier?.id, objectEntity?.id, ...sentenceAnalysis.entities.map((e) => e.entityId)].filter(Boolean));
@@ -374,7 +392,20 @@ async function attachProposition(db, prop, ev, ctx) {
     lineageBasis: parent.basis,
     upstreamSourceId: upstream || null,
     referencesAdded,
+    superseded,
   };
+}
+
+/**
+ * Once a source belongs to a proposition-based family, its variants in older
+ * title-made families are removed (SUPERSEDE_LEGACY_VARIANTS); a family left
+ * without variants is kept as MERGED with merged_into_claim_id.
+ */
+export async function supersedeLegacy(db, sourceId) {
+  const r = await db.exec(`BEGIN :n := supersede_legacy_variants(:id); END;`, {
+    n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, id: sourceId,
+  });
+  return r.outBinds.n || 0;
 }
 
 /**
@@ -395,7 +426,11 @@ export async function analyseSourceEvidence(db, ctx) {
   const hasClaim = (t) => Boolean(extractProposition(t, extractCtx));
   const evidence = selectEvidence(ctx.input, scorer, { entityTest, hasClaim });
 
-  const result = { evidenceCount: evidence.length, claims: [], referencesAdded: 0 };
+  // Stage counters (recorded per run in SEARCH_RUN_STAGES)
+  const result = {
+    evidenceCount: evidence.length, claims: [], referencesAdded: 0,
+    sentencesExamined: 0, propositions: 0, variantsAdded: 0, superseded: 0,
+  };
   if (!evidence.length) return result;
 
   for (const ev of evidence) ev.evidenceId = await recordEvidence(db, ctx.sourceId, ctx.runId, ev);
@@ -403,8 +438,10 @@ export async function analyseSourceEvidence(db, ctx) {
   const seen = new Set();
   for (const ev of evidence) {
     if (result.claims.length >= MAX_PROPOSITIONS_PER_SOURCE) break;
+    result.sentencesExamined += 1;
     const prop = extractProposition(ev.text, extractCtx);
     if (!prop) continue;
+    result.propositions += 1;
     const sig = `${prop.subject}|${prop.predicate}|${prop.object}|${prop.qualifier}`.toLowerCase();
     if (seen.has(sig)) continue;
     seen.add(sig);
@@ -412,7 +449,9 @@ export async function analyseSourceEvidence(db, ctx) {
     const out = await attachProposition(db, prop, ev, { ...ctx, helpers, sentenceAnalysis });
     if (out) {
       result.claims.push(out);
-      result.referencesAdded += out.referencesAdded;
+      result.referencesAdded += out.referencesAdded || 0;
+      result.superseded += out.superseded || 0;
+      if (!out.reused) result.variantsAdded += 1;
     }
   }
 
@@ -444,13 +483,14 @@ export async function analyseSourceEvidence(db, ctx) {
           {
             claim_id: match.claimId, source_id: ctx.sourceId, parent_id: parent.parentId, text: best.text,
             actor: analysis.actor, action: analysis.action, location: analysis.location, event: analysis.event,
-            quantity: analysis.quantity, certainty: analysis.certainty, attribution: ctx.publisher,
+            quantity: analysis.quantity, certainty: analysis.certainty, attribution: detectAttributions(best.text).join(', ') || null,
             score: match.score.total, basis: parent.basis, breakdown: describeBreakdown(match.score.parts),
             variant_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, evidence_id: best.evidenceId,
           }
         );
         await applySourceDependence(db, ctx.sourceId);
         result.claims.push({ claimId: match.claimId, newClaim: false, method: 'RULE_STRONG', variantId: added.outBinds.variant_id });
+        result.variantsAdded += 1;
       }
     }
   }
@@ -529,7 +569,8 @@ export async function processSourceItem(db, item, options) {
     status: 'INSERTED',
     sourceId,
     claims: analysis.claims,
-    evidenceCount: analysis.evidenceCount,
+    ...analysis,
+    linkReferences: referencesAdded,
     referencesAdded: referencesAdded + analysis.referencesAdded,
   };
 }
@@ -540,16 +581,20 @@ export async function analyseStoredSource(db, sourceId, options) {
     `SELECT source_id, source_title, source_url, publisher, snippet, published_at FROM sources WHERE source_id = :id`,
     { id: sourceId }
   );
-  if (!src) return { claims: [], evidenceCount: 0, referencesAdded: 0 };
+  if (!src) return { claims: [], evidenceCount: 0, referencesAdded: 0, sentencesExamined: 0, propositions: 0, variantsAdded: 0, superseded: 0 };
   const lines = String(src.snippet || '').split('\n').filter(Boolean);
+  // When a page could not be fetched, the stored text IS the search snippet:
+  // it is then offered (and labelled) as SEARCH_SNIPPET, not as page text
+  const flat = (t) => String(t || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const storedIsSnippet = Boolean(src.snippet) && Boolean(options.searchSnippet) && flat(src.snippet) === flat(options.searchSnippet);
   return analyseSourceEvidence(db, {
     sourceId,
     runId: options.runId,
     input: {
-      blocks: lines.length > 1 ? lines : null,
-      text: lines.length > 1 ? null : src.snippet,
+      blocks: !storedIsSnippet && lines.length > 1 ? lines : null,
+      text: storedIsSnippet || lines.length > 1 ? null : src.snippet,
       description: null,
-      snippet: options.searchSnippet || null,
+      snippet: options.searchSnippet || (storedIsSnippet ? src.snippet : null),
       title: src.source_title,
     },
     page: { title: src.source_title, publisher: src.publisher, url: src.source_url },

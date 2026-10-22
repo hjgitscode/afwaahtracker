@@ -2,7 +2,7 @@ import { memo, useMemo, useState } from 'react';
 import { ReactFlow, Background, Controls, Handle, Position, MarkerType } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { formatDate, truncate } from '../../utils/format.js';
-import { LINEAGE_BASIS_LABEL } from '../../utils/labels.js';
+import { LINEAGE_BASIS_LABEL, REFERENCE_TYPE_LABEL } from '../../utils/labels.js';
 
 const NODE_W = 230;
 const NODE_H = 128;
@@ -144,6 +144,10 @@ export default function LineageGraph({ kind, nodes: allNodes = [], edges = [], o
           source: String(e.source),
           target: String(e.target),
           type: 'smoothstep',
+          // source lineage: the SOURCE_REFERENCES type that is the evidence for the edge
+          label: kind === 'source' ? REFERENCE_TYPE_LABEL[e.kind] : undefined,
+          labelStyle: { fontSize: 11, fontWeight: 700, fill: '#4a6a88' },
+          labelBgStyle: { fill: '#f4f8fc' },
           markerEnd: { type: MarkerType.ArrowClosed, color: '#9fb3c7', width: 18, height: 18 },
           style: { stroke: inferred ? '#b4c4d4' : '#8ea7c0', strokeWidth: 1.6, strokeDasharray: inferred ? '6 5' : undefined },
         };

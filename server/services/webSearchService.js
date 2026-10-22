@@ -7,7 +7,7 @@ import { query, queryOne } from '../db/pool.js';
 import { NotFoundError } from '../middleware/errors.js';
 import { investigateWeb, getProgress, STAGES } from '../web-search/webInvestigator.js';
 import { isWebSearchConfigured } from '../web-search/searchProvider.js';
-import { listClaims } from './claimService.js';
+import { listClaims, diagnosticsShape } from './claimService.js';
 import { listSources } from './sourceService.js';
 
 export const UNAVAILABLE_MESSAGE = 'Live web search unavailable — showing stored sources.';
@@ -209,4 +209,91 @@ export function listRuns(limit = 20) {
     `SELECT * FROM vw_web_search_runs ORDER BY started_at DESC FETCH FIRST :n ROWS ONLY`,
     { n: Math.min(Math.max(Number.parseInt(limit, 10) || 20, 1), 100) }
   );
+}
+
+/**
+ * Novelty diagnostics of one investigation, all counted in Oracle:
+ *   stages    SEARCH_RUN_STAGES: what every pipeline stage examined / wrote
+ *   run       totals over the run's sources (SEARCH_RESULT_LINKS)
+ *   families  VW_CLAIM_NOVELTY_DIAGNOSTICS for each family the run found
+ *             (SEARCH_CLAIM_MATCHES), with its relationship to the query
+ */
+export async function getRunDiagnostics(runId) {
+  const run = await queryOne(
+    `SELECT search_run_id, query_text, status, query_type, hypothesis_text, error_message
+       FROM web_search_runs WHERE search_run_id = :id`,
+    { id: runId }
+  );
+  if (!run) throw new NotFoundError(`Web search run #${runId} does not exist.`);
+  const [stages, totals, families] = await Promise.all([
+    query(
+      `SELECT stage_code, items_examined, rows_written, detail
+         FROM search_run_stages WHERE search_run_id = :id ORDER BY stage_order`,
+      { id: runId }
+    ),
+    queryOne(
+      `WITH rs AS (SELECT DISTINCT source_id FROM search_result_links WHERE search_run_id = :id)
+       SELECT (SELECT COUNT(*) FROM rs) AS source_count,
+              (SELECT COUNT(*) FROM rs JOIN sources s ON s.source_id = rs.source_id
+                WHERE s.published_at IS NOT NULL) AS dated_source_count,
+              (SELECT COUNT(*) FROM source_evidence e WHERE e.source_id IN (SELECT source_id FROM rs)) AS evidence_count,
+              (SELECT COUNT(DISTINCT v.source_id) FROM claim_variants v JOIN claims c ON c.claim_id = v.claim_id
+                WHERE v.source_id IN (SELECT source_id FROM rs) AND c.status <> 'MERGED') AS claim_linked_sources,
+              (SELECT COUNT(*) FROM claim_variants v
+                WHERE v.source_id IN (SELECT source_id FROM rs)
+                  AND v.claim_id IN (SELECT claim_id FROM search_claim_matches WHERE search_run_id = :id)) AS variant_count,
+              (SELECT COUNT(*) FROM claim_variants v
+                WHERE v.source_id IN (SELECT source_id FROM rs)
+                  AND v.claim_id IN (SELECT claim_id FROM search_claim_matches WHERE search_run_id = :id)
+                  AND (v.relation_predicate IS NOT NULL OR v.action IS NOT NULL)) AS structured_variant_count,
+              (SELECT COUNT(*) FROM claim_variants v
+                WHERE v.source_id IN (SELECT source_id FROM rs)
+                  AND v.claim_id IN (SELECT claim_id FROM search_claim_matches WHERE search_run_id = :id)
+                  AND v.parent_variant_id IS NOT NULL) AS variants_with_parent,
+              (SELECT COUNT(*) FROM source_references r WHERE r.from_source_id IN (SELECT source_id FROM rs)) AS source_reference_count,
+              (SELECT COUNT(*) FROM rs JOIN sources s ON s.source_id = rs.source_id
+                WHERE s.derived_from_source_id IS NOT NULL) AS sources_with_known_upstream
+         FROM dual`,
+      { id: runId }
+    ),
+    query(
+      `SELECT m.relationship_to_query, c.canonical_claim, d.*
+         FROM search_claim_matches m
+         JOIN claims c ON c.claim_id = m.claim_id
+         JOIN vw_claim_novelty_diagnostics d ON d.claim_id = m.claim_id
+        WHERE m.search_run_id = :id
+        ORDER BY DECODE(m.relationship_to_query, 'EXACT', 1, 'DIFFERENT_VALUE', 2, 'RELATED', 3, 4), d.source_count DESC`,
+      { id: runId }
+    ),
+  ]);
+  const n = (v) => Number(v || 0);
+  const stageRan = new Set(stages.map((s) => s.stage_code));
+  return {
+    searchRunId: run.search_run_id,
+    query: run.query_text,
+    status: run.status,
+    queryType: run.query_type,
+    hypothesis: run.hypothesis_text,
+    error: run.error_message,
+    stages: stages.map((s) => ({ stage: s.stage_code, examined: n(s.items_examined), written: n(s.rows_written), detail: s.detail })),
+    stagesNotRun: ['SEARCH', 'NORMALISE', 'FETCH', 'EVIDENCE', 'PROPOSITIONS', 'VARIANTS', 'SUPERSEDE', 'REFERENCES',
+      'PROVENANCE', 'LINEAGE', 'MUTATIONS', 'MATCHES'].filter((s) => !stageRan.has(s)),
+    run: {
+      sourceCount: n(totals.source_count),
+      datedSourceCount: n(totals.dated_source_count),
+      evidenceCount: n(totals.evidence_count),
+      claimLinkedSources: n(totals.claim_linked_sources),
+      variantCount: n(totals.variant_count),
+      structuredVariantCount: n(totals.structured_variant_count),
+      variantsWithParent: n(totals.variants_with_parent),
+      sourceReferenceCount: n(totals.source_reference_count),
+      sourcesWithKnownUpstream: n(totals.sources_with_known_upstream),
+    },
+    families: families.map((f) => ({
+      claimId: f.claim_id,
+      canonicalClaim: f.canonical_claim,
+      relationshipToQuery: f.relationship_to_query,
+      ...diagnosticsShape(f),
+    })),
+  };
 }

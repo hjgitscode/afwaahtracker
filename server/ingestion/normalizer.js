@@ -110,6 +110,18 @@ export function toDate(value) {
 }
 
 /**
+ * A publication date written into the address itself ("/2025/10/25/",
+ * "/2025-10-25/"), used only when neither the page nor the search result
+ * states one. Day and month must be valid; nothing else is guessed.
+ */
+export function dateFromUrl(url) {
+  const m = /\/(20\d{2})[/-](0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])(?:\/|-|\.|$)/.exec(String(url || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCDate() === Number(m[3]) && d <= new Date() ? d : null;
+}
+
+/**
  * Canonical item shape produced by every adapter.
  */
 export function makeItem({ externalId, title, url, linkedUrl, publisher, author, publishedAt, snippet, engagement, unknownDate = 'now' }) {

@@ -70,6 +70,7 @@ export const api = {
   claimMutations: (id, opts) => request(`/claims/${id}/mutations`, opts),
   claimLineage: (id, opts) => request(`/claims/${id}/claim-lineage`, opts),
   sourceLineage: (id, opts) => request(`/claims/${id}/source-lineage`, opts),
+  claimDiagnostics: (id, opts) => request(`/claims/${id}/novelty-diagnostics`, opts),
   sources: (params, opts) => request('/sources', { params, ...opts }),
   source: (id, opts) => request(`/sources/${id}`, opts),
   platforms: (opts) => request('/platforms', opts),

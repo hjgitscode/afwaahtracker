@@ -2,7 +2,7 @@
 
 All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `database/install.sql` runs them in dependency order.
 
-## Tables (22)
+## Tables (23)
 
 | Table | Purpose | Key relationships |
 |---|---|---|
@@ -28,6 +28,9 @@ All objects live in one schema (`AFWAAH`). Scripts are SQL*Plus compatible. `dat
 | `SOURCE_EVIDENCE` | The 1–3 sentences of a source that state something about the investigated claim (`PAGE_SENTENCE` › `META_DESCRIPTION` › `SEARCH_SNIPPET` › `TITLE_FALLBACK`) | FK source, search run; UNIQUE (source, sentence hash) |
 | `CLAIM_PROPOSITIONS` | Structured proposition of a claim family: subject · predicate · object · qualifier · temporal scope | PK/FK claim; FK subject/object/qualifier entity; UNIQUE `normalized_signature` |
 | `SEARCH_CLAIM_MATCHES` | M:N search runs ↔ claim families: `EXACT`, `DIFFERENT_VALUE`, `RELATED`, `TOPICAL`, with evidence and source counts | composite PK, FK run and claim |
+| `SEARCH_RUN_STAGES` | One row per pipeline stage of a web investigation: items examined, rows written | composite PK (run, stage), FK run (CASCADE) |
+
+`CLAIMS.merged_into_claim_id` (self-FK, status `MERGED`) keeps an older title-made family for history once its sources belong to a proposition-based family (`SUPERSEDE_LEGACY_VARIANTS`). `CLAIM_VARIANTS.relation_object_key` holds the variant's proposition object key, so the Mutation Ledger compares objects as the family was identified (rewording is not a mutation).
 
 `CLAIM_VARIANTS` also carries `evidence_id` (FK `SOURCE_EVIDENCE`), `relation_subject / predicate / object / qualifier` and `extraction_basis`; `WEB_SEARCH_RUNS` stores the parsed query hypothesis (`query_type`, `hypothesis_*`). Signature: `SUBJECT_KEY|PREDICATE|OBJECT_KEY|QUALIFIER_KEY|TEMPORAL`, where entity keys are `E<entity_id>` and a role is its code (`VICE_PRESIDENT`), so *Director* and *Vice President* never collide.
 

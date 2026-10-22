@@ -31,6 +31,7 @@ export const LINEAGE_BASIS_LABEL = {
   CURATED: 'Curated',
   MANUAL: 'Manual',
   EXPLICIT_REFERENCE: 'Known reference',
+  ATTRIBUTION_REFERENCE: 'Known attribution',
   PROPOSITION_PREDECESSOR: 'Inferred predecessor',
   LEXICAL_PREDECESSOR: 'Inferred predecessor',
   AUTO_ROOT: 'Inferred predecessor',
@@ -43,6 +44,7 @@ export const REFERENCE_TYPE_LABEL = {
   CANONICAL_REFERENCE: 'Canonical reference',
   ATTRIBUTION: 'Attribution',
   MANUAL: 'Manual',
+  KNOWN_UPSTREAM: 'Known upstream',
 };
 
 export const NOT_DETERMINED = 'Not determined';

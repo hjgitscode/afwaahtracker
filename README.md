@@ -78,6 +78,10 @@ You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container cre
 
 `npm run db:check` tests the database connection.
 
+`npm run repair` upgrades live data stored by earlier versions (no reset, demo data untouched, safe to repeat). It recovers missing publication dates (date in the URL, else the page's own metadata), re-reads stored sources into evidence sentences and propositions, and moves sources out of old title-made families (left as **MERGED**). It then records attribution references and rebuilds lineage and the Mutation Ledger. `npm run repair -- --no-fetch` skips the page fetch.
+
+`npm run investigate -- "Is GV Selvam director of VIT?"` runs one live investigation from the terminal and prints its Oracle diagnostics: every pipeline stage (examined / written), then sources, evidence, structured variants, parents, mutations, references and the Known Echo Ratio of each family found. `--run 42` or `--claim 305` prints the diagnostics of an earlier run or family.
+
 ### Pages
 
 | Page | What it is for |
@@ -99,7 +103,9 @@ You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container cre
 5. **Extract** title, publisher, author, publication date, main text, canonical URL and outbound links. A field that cannot be found is stored as `NULL` and shown as *Not determined* — nothing is guessed.
 6. **Hypothesis.** Before any result is analysed, a deterministic parser turns the query into a hypothesis (*Is GV Selvam director of VIT?* → `G. V. Selvam · HOLDS_ROLE · Director · VIT`) or marks it `TOPIC_SEARCH`. The hypothesis is never stored as a claim.
 7. **Evidence → proposition → claim — one transaction per result**: insert the source and link it to the run; score its sentences against the hypothesis (entity aliases, role/relation words, query tokens; menus and boilerplate penalised) and store the best 1–3 in `SOURCE_EVIDENCE` (page sentence › meta description › search snippet › title); extract a structured proposition with rule-based patterns (roles, location, founded-by, membership, ownership, events with certainty/date/place); Oracle finds the claim family by `normalized_signature` (or creates one with `CREATE_PROPOSITION_CLAIM`); insert the variant pointing at its evidence (the trigger writes the Mutation Ledger); record hyperlink and *according to / via / citing* attribution references. A source with no extractable proposition stays a **related source**. A failure rolls back that result only.
-8. **Relationship pass**: links between pages in the same run are resolved, `RELINK_CLAIM_LINEAGE` re-chooses parents, and `RECORD_SEARCH_CLAIM_MATCHES` relates the run to each family (`EXACT`, `DIFFERENT_VALUE`, `RELATED`, `TOPICAL`).
+8. **Provenance pass** over every source of the run (new and already stored): hyperlinks, canonical links and *according to / via / reported by / citing / source: X* credits that name a stored source in the same family become `SOURCE_REFERENCES`.
+9. **`FINALISE_CLAIM_LINEAGE`** for each touched family: known upstream sources, then wording parents in publication order (link → credit → closest earlier dated version of the same proposition → none), then the Mutation Ledger, rebuilt from the final parents. `RECORD_SEARCH_CLAIM_MATCHES` relates the run to each family (`EXACT`, `DIFFERENT_VALUE`, `RELATED`, `TOPICAL`).
+10. Every stage writes a `SEARCH_RUN_STAGES` row (items examined, rows written). `GET /api/web-search/:runId/novelty-diagnostics` therefore separates "0 detected" from "stage never ran".
 
 Explore shows the investigated query next to what was found: e.g. *RELATED CLAIM FOUND — G. V. Selvam is Vice President of VIT* and *No retrieved source in this investigation directly supported the exact searched relationship.* No truth verdict is given.
 

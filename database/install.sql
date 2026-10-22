@@ -18,6 +18,7 @@
 --   10         live web investigation (also usable as a migration)
 --   11         Tavily as the web search provider (also usable as a migration)
 --   12         claim intelligence: evidence, propositions, search-claim matches
+--   13         novelty pipeline: run stages, provenance/lineage/ledger finalisation, legacy merge
 --------------------------------------------------------------------------------
 SET ECHO OFF
 SET VERIFY OFF
@@ -41,6 +42,7 @@ PROMPT ============================================================
 @@10_web_investigation.sql
 @@11_tavily_provider.sql
 @@12_claim_intelligence.sql
+@@13_novelty_pipeline.sql
 
 PROMPT Recompiling dependent objects ...
 BEGIN

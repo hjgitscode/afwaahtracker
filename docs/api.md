@@ -30,6 +30,8 @@ Base URL: `http://localhost:3000/api`. All responses are JSON. Errors have this 
 | `GET /claims/:id` | Overview, PL/SQL Echo Ratio (`echo_ratio_plsql`), fingerprint, entities, keywords, platforms |
 | `GET /claims/:id/sources` | Sources and claim versions (`VW_CLAIM_SOURCES`), with dependency, upstream publisher, `lineage_basis`, match breakdown and an `is_earliest` flag (first dated source; undated sources sort last) |
 | `GET /claims/:id/evidence` | Evidence rows from `VW_CLAIM_EVIDENCE` (sentence, method, publisher, URL, date, relation fields, dependency, lineage basis, `is_earliest`) |
+| `GET /claims/:id/novelty-diagnostics` | `VW_CLAIM_NOVELTY_DIAGNOSTICS`: sources, dated sources, evidence, variants, structured variants, variants with parent, claim-lineage edges, mutations, source references, source-lineage edges, known upstream sources, Known Echo Ratio; plus the `SEARCH_RUN_STAGES` of the runs that touched the family |
+| `GET /web-search/:runId/novelty-diagnostics` | The run's stages (examined / written, and any stage that did not run), totals over its sources, and the diagnostics of every family it found |
 | `GET /claims/:id/investigation?run=` | `VW_CLAIM_INVESTIGATION` row plus, with `run`, the run's hypothesis and this claim's `SEARCH_CLAIM_MATCHES` relationship |
 | `GET /claims/:id/variants` | Structured variants with match score, method and breakdown |
 | `GET /claims/:id/mutations` | Mutation Ledger rows with from/to source details |

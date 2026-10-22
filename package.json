@@ -13,6 +13,8 @@
     "db:install": "npm run db:install --prefix server",
     "db:migrate": "npm run db:migrate --prefix server",
     "db:check": "npm run db:check --prefix server",
+    "repair": "npm run repair --prefix server",
+    "investigate": "npm run investigate --prefix server --",
     "ingest": "npm run ingest --prefix server"
   },
   "devDependencies": {
