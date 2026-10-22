@@ -8,7 +8,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initPool, closePool } from '../db/pool.js';
+import { initPool, closePool, query } from '../db/pool.js';
 import { investigateWeb } from '../web-search/webInvestigator.js';
 import { getRunDiagnostics } from '../services/webSearchService.js';
 import { getNoveltyDiagnostics } from '../services/claimService.js';
@@ -59,16 +59,35 @@ async function main() {
     if (flag('--claim')) {
       const d = await getNoveltyDiagnostics(flag('--claim'));
       printFamily(d);
+      console.log('\nSources (CLAIM_VARIANTS + SOURCES + SOURCE_EVIDENCE):');
+      const rows = await query(
+        `SELECT v.source_id, s.publisher, s.published_at, s.source_title, v.relation_subject, v.relation_predicate,
+                v.relation_object, v.relation_qualifier, v.lineage_basis, e.extraction_method, e.sentence_text,
+                (SELECT LISTAGG(v2.claim_id, ',') WITHIN GROUP (ORDER BY v2.claim_id) FROM claim_variants v2
+                  WHERE v2.source_id = v.source_id AND v2.claim_id <> v.claim_id) AS other_claims,
+                (SELECT COUNT(*) FROM source_evidence e2 WHERE e2.source_id = v.source_id) AS stored_sentences
+           FROM claim_variants v JOIN sources s ON s.source_id = v.source_id
+           LEFT JOIN source_evidence e ON e.evidence_id = v.evidence_id
+          WHERE v.claim_id = :id ORDER BY s.published_at NULLS LAST, v.source_id`,
+        { id: flag('--claim') }
+      );
+      for (const r of rows) {
+        console.log(`  source #${r.source_id} ${r.publisher || ''} ${r.published_at ? new Date(r.published_at).toISOString().slice(0, 10) : 'undated'}`
+          + `${r.other_claims ? `  (also in claims ${r.other_claims})` : ''}`);
+        console.log(`    title: ${String(r.source_title || '').slice(0, 120)}`);
+        console.log(`    evidence: ${r.sentence_text ? `[${r.extraction_method}] ${r.sentence_text.slice(0, 160)}` : `none linked (${r.stored_sentences} sentences stored for this source)`}`);
+        console.log(`    structure: ${r.relation_predicate ? `${r.relation_subject} | ${r.relation_predicate} | ${r.relation_object} | ${r.relation_qualifier || '-'}` : 'none'}; parent basis ${r.lineage_basis}`);
+      }
       console.log(`\nStages of the investigations that touched it:`);
       for (const s of d.stages) console.log(`  run #${s.search_run_id} ${s.stage_code.padEnd(13)} examined ${s.items_examined} wrote ${s.rows_written}  ${s.detail || ''}`);
       return;
     }
     let runId = flag('--run');
     if (!runId) {
-      const query = args.filter((a) => !a.startsWith('--')).join(' ').trim();
-      if (!query) throw new Error('Give a query, e.g. npm run investigate -- "Is GV Selvam director of VIT?"');
-      console.log(`Investigating "${query}" ...`);
-      runId = (await investigateWeb(query)).searchRunId;
+      const text = args.filter((a) => !a.startsWith('--')).join(' ').trim();
+      if (!text) throw new Error('Give a query, e.g. npm run investigate -- "Is GV Selvam director of VIT?"');
+      console.log(`Investigating "${text}" ...`);
+      runId = (await investigateWeb(text)).searchRunId;
     }
     printRun(await getRunDiagnostics(runId));
     if (args.includes('--json')) console.log(JSON.stringify(await getRunDiagnostics(runId), null, 2));

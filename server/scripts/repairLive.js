@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initPool, closePool, withConnection, withTransaction, oracledb } from '../db/pool.js';
 import { loadDictionary } from '../ingestion/entityMatcher.js';
-import { analyseStoredSource } from '../ingestion/sourceProcessor.js';
+import { analyseStoredSource, supersedeLegacy } from '../ingestion/sourceProcessor.js';
 import { parseQuery } from '../claims/hypothesis.js';
 import { makeScorer, detectAttributions } from '../claims/evidence.js';
 import { makeEntityHelpers } from '../claims/entities.js';
@@ -172,6 +172,24 @@ export async function repairLive({ log = console.log, fetch = true } = {}) {
   }
   log(`Re-read ${tally.sources} stored live sources: ${tally.evidence} evidence sentences, ${tally.propositions} propositions, `
     + `${tally.variants} new variants, ${tally.superseded} title-made variants moved${tally.failed ? `, ${tally.failed} rolled back` : ''}.`);
+
+  // 2a. Sources that already belong to a proposition-based family but still
+  //     sit in a title-made family too (e.g. attached by an earlier run):
+  //     selected in Oracle, independent of text extraction
+  const doubled = await withConnection((db) => db.rows(
+    `SELECT DISTINCT v.source_id
+       FROM claim_variants v JOIN claims c ON c.claim_id = v.claim_id
+      WHERE c.claim_origin = 'AUTOMATED' AND c.status <> 'MERGED'
+        AND NOT EXISTS (SELECT 1 FROM claim_propositions p WHERE p.claim_id = v.claim_id)
+        AND EXISTS (SELECT 1 FROM claim_variants v2 JOIN claim_propositions p2 ON p2.claim_id = v2.claim_id
+                     WHERE v2.source_id = v.source_id)`
+  ));
+  let moved = 0;
+  for (const d of doubled) {
+    moved += await withTransaction((db) => supersedeLegacy(db, d.source_id))
+      .catch((e) => { log(`  source #${d.source_id}: rolled back (${e.message.split('\n')[0]})`); return 0; });
+  }
+  if (doubled.length) log(`Moved ${moved} variants of ${doubled.length} sources out of title-made families they shared with a proposition-based family.`);
 
   // 2b. Proposition object keys for structured variants stored before
   //     migration 13 (the ledger compares objects by this key)

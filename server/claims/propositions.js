@@ -48,12 +48,15 @@ const ROLE_PATTERNS = [
   ['ROLE:APPOINTED', new RegExp(`${PERSON}\\s+(?:has\\s+been\\s+|was\\s+|is\\s+|were\\s+)?(?:appointed|named|elected|designated|promoted|nominated)\\s+(?:as\\s+|to\\s+the\\s+post\\s+of\\s+|to\\s+)?${ART}${ROLE}\\s+${PREP}\\s+${ORG}`)],
   ['ROLE:APPOSITIVE', new RegExp(`${PERSON},\\s+${ART}${ROLE}\\s+${PREP}\\s+${ORG}`)],
   ['ROLE:TITLE_NAME', new RegExp(`${ROLE}\\s+${PREP}\\s+${ORG},\\s+${PERSON}`)],
+  // Newspaper style "G.V. Selvam, vice-president, VIT, said ...": the
+  // organisation must end at a comma, full stop or semicolon
+  ['ROLE:APPOSITIVE', new RegExp(`${PERSON},\\s+${ART}${ROLE},\\s+${ORG}(?=\\s*(?:[,.;]|$))`)],
 ];
 // "Director of VIT Dr. Ravi Kumar": no comma, so the organisation is accepted
 // only as the longest known-organisation prefix of the words after the role
 const TITLE_REST = new RegExp(`${ROLE}\\s+${PREP}\\s+(?<rest>[A-Z][^,;:!?]{2,90})`);
 // Organisation-first form, accepted only when the organisation is a known entity
-const ORG_TITLE = new RegExp(`(?<org>[A-Z][A-Za-z0-9&-]{1,40}(?:\\s+(?:of\\s+)?[A-Z][A-Za-z0-9&-]+){0,4}?)(?:'s|’s)?\\s+${ROLE}\\s+${PERSON}`, 'g');
+const ORG_TITLE = new RegExp(`(?<org>[A-Z][A-Za-z0-9&-]{1,40}(?:\\s+(?:of\\s+)?[A-Z][A-Za-z0-9&-]+){0,4}?(?:\\s*\\([A-Z]{2,8}\\))?)(?:'s|’s)?\\s+${ROLE}\\s+${PERSON}`, 'g');
 // Role without organisation (organisation taken from page context)
 const ROLE_NO_ORG = [
   ['ROLE:IS', new RegExp(`${PERSON}\\s*${IS}\\s+${ART}${ROLE}\\b(?!\\s+(?:of|at|for|in)\\s+[A-Z])`)],
@@ -204,9 +207,11 @@ export function extractProposition(sentence, ctx = {}) {
   if (ctx.knownOrg) {
     ORG_TITLE.lastIndex = 0;
     for (let ot = ORG_TITLE.exec(s); ot; ot = ORG_TITLE.exec(s)) {
-      const words = ot.groups.org.split(/\s+/);
+      // "Vellore Institute of Technology (VIT)": the name or its acronym
+      const acr = /\(([A-Z]{2,8})\)$/.exec(ot.groups.org)?.[1];
+      const words = ot.groups.org.replace(/\s*\([A-Z]{2,8}\)$/, '').split(/\s+/);
       for (let i = 0; i < words.length; i += 1) {
-        const org = ctx.knownOrg(words.slice(i).join(' '));
+        const org = ctx.knownOrg(words.slice(i).join(' ')) || (i === 0 && acr ? ctx.knownOrg(acr) : null);
         if (org) {
           const p = role(ot, 'ROLE:ORG_TITLE', org.name);
           if (p) return p;

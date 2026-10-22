@@ -284,7 +284,12 @@ async function attachProposition(db, prop, ev, ctx) {
 
   // A source contributes one variant per claim family
   const existing = await db.one('SELECT variant_id FROM claim_variants WHERE claim_id = :c AND source_id = :s', { c: claimId, s: sourceId });
-  if (existing) return { claimId, newClaim: false, method: match.method, variantId: existing.variant_id, reused: true };
+  if (existing) {
+    // Already in this family (e.g. from an earlier run): still take it out of
+    // any older title-made family it also sits in
+    const superseded = await supersedeLegacy(db, sourceId);
+    return { claimId, newClaim: false, method: match.method, variantId: existing.variant_id, reused: true, superseded };
+  }
 
   const attributions = detectAttributions(ev.text);
   const fields = {
