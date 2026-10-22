@@ -269,6 +269,8 @@ export function extractProposition(sentence, ctx = {}) {
     const verb = VERB_LOOKUP.get(m.groups.verb.toLowerCase().replace(/\s+/g, ' '));
     const subj = cleanOrg(m.groups.subj);
     if (!verb || !isPlausibleName(subj) || PRONOUN_SUBJ.test(subj) || BAD_SUBJ.test(subj)) continue;
+    // "announced for receiving the Doctorate": the verb has no direct object
+    if (/^\s*(?:for|as|with|of|about|into|from|by)\b/i.test(m.groups.obj || '')) continue;
     let object = cleanEventObject(m.groups.obj);
     // "perform at VIT" / "visited Mumbai": the place is the object
     if (!object && (verb.code === 'VISITED' || verb.code === 'PERFORMED_AT')) continue;

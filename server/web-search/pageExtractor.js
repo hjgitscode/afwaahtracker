@@ -6,8 +6,8 @@
  *   title        og:title > twitter:title > JSON-LD headline > first <h1> > <title>
  *   publisher    og:site_name > JSON-LD publisher.name > application-name
  *   author       JSON-LD author.name > meta[name=author] > article:author > rel=author
- *   published    article:published_time > JSON-LD datePublished > meta date fields
- *                > first <time datetime>
+ *   published    article:published_time > JSON-LD datePublished / uploadDate > meta date
+ *                fields > first <time datetime>
  *   canonical    <link rel=canonical>  (falls back to og:url)
  *   blocks/text  readable blocks inside <article>, else <main>, else <body>
  */
@@ -80,6 +80,9 @@ export function extractPage(html, pageUrl) {
 
   const publishedAt = validDate(meta('meta[property="article:published_time"]'))
     || validDate(article?.datePublished)
+    // Video and other non-article pages (YouTube: VideoObject.uploadDate, itemprop=uploadDate)
+    || validDate(ld.find((n) => n.datePublished || n.uploadDate)?.datePublished || ld.find((n) => n.uploadDate)?.uploadDate)
+    || validDate(meta('meta[itemprop="uploadDate"]'))
     || validDate(meta('meta[name="date"]') || meta('meta[name="pubdate"]') || meta('meta[name="publish-date"]')
       || meta('meta[itemprop="datePublished"]') || meta('meta[name="dc.date"]') || meta('meta[name="DC.date.issued"]'))
     || validDate($('time[datetime]').first().attr('datetime'))

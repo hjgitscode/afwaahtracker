@@ -116,15 +116,28 @@ export const EVIDENCE_THRESHOLD = 25;
 /**
  * Select evidence for one source.
  * input: { blocks, text, description, snippet, title }
+ * hasClaim(text): true when a structured proposition can be extracted.
  * returns [{ text, order, score, type, method }] (max 3), best first
+ *
+ * The highest tier with a relevant sentence supplies the evidence. When none
+ * of its sentences states an extractable relationship (e.g. a video page whose
+ * body is a sidebar), the first relationship-bearing sentence from a lower
+ * tier (meta description, search snippet, title) is added, so a page whose
+ * title says "Dr. G. V. Selvam, Vice President of VIT" is not lost.
  */
-export function selectEvidence(input, scorer, { entityTest = () => false, max = 3 } = {}) {
+export function selectEvidence(input, scorer, { entityTest = () => false, max = 3, hasClaim = null } = {}) {
   const tiers = [
     ['PAGE_SENTENCE', input.blocks?.length ? candidateSentences(input.blocks) : splitSentences(input.text)],
     ['META_DESCRIPTION', splitSentences(input.description)],
     ['SEARCH_SNIPPET', splitSentences(input.snippet)],
     ['TITLE_FALLBACK', input.title ? [input.title] : []],
   ];
+  const typed = (e) => ({
+    ...e,
+    type: e.method === 'TITLE_FALLBACK' ? 'TITLE' : e.method === 'SEARCH_SNIPPET' ? 'SNIPPET_FALLBACK'
+      : /\b(?:said|says|according to|told|stated)\b/i.test(e.text) ? 'ATTRIBUTED_STATEMENT' : 'DIRECT_STATEMENT',
+  });
+  let chosen = null;
   for (const [method, sentences] of tiers) {
     const seen = new Set();
     const scored = [];
@@ -135,14 +148,20 @@ export function selectEvidence(input, scorer, { entityTest = () => false, max = 
       const { score } = scorer(text, order, entityTest(text));
       if (score >= EVIDENCE_THRESHOLD) scored.push({ text: text.slice(0, 1000), order, score, method });
     });
-    if (scored.length) {
-      return scored
-        .sort((a, b) => b.score - a.score || a.order - b.order)
-        .slice(0, max)
-        .map((e) => ({ ...e, type: method === 'TITLE_FALLBACK' ? 'TITLE' : method === 'SEARCH_SNIPPET' ? 'SNIPPET_FALLBACK' : /\b(?:said|says|according to|told|stated)\b/i.test(e.text) ? 'ATTRIBUTED_STATEMENT' : 'DIRECT_STATEMENT' }));
+    if (!scored.length) continue;
+    scored.sort((a, b) => b.score - a.score || a.order - b.order);
+    if (!chosen) {
+      chosen = scored.slice(0, max);
+      if (!hasClaim || chosen.some((e) => hasClaim(e.text))) return chosen.map(typed);
+      // Keep the best sentence; prefer a relationship-bearing one from the same tier
+      const inTier = scored.slice(max).find((e) => hasClaim(e.text));
+      if (inTier) return [...chosen.slice(0, max - 1), inTier].map(typed);
+      continue;
     }
+    const withClaim = scored.find((e) => hasClaim(e.text) && !chosen.some((c) => c.text.toLowerCase() === e.text.toLowerCase()));
+    if (withClaim) return [...chosen.slice(0, max - 1), withClaim].map(typed);
   }
-  return [];
+  return (chosen || []).map(typed);
 }
 
 // "according to Reuters", "reported by ANI", "via PTI", "(Reuters)", "Source: The Hindu"

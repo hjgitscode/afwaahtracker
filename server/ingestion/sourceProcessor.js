@@ -388,17 +388,18 @@ export async function analyseSourceEvidence(db, ctx) {
   const helpers = makeEntityHelpers(ctx.dictionary, ctx.hypothesis);
   const scorer = ctx.scorer || makeScorer({ hypothesis: ctx.hypothesis, query: ctx.input.title, aliasesFor: helpers.aliasesFor });
   const entityTest = (t) => detectEntities(t, ctx.dictionary).length > 0;
-  const evidence = selectEvidence(ctx.input, scorer, { entityTest });
+  const extractCtx = {
+    knownOrg: helpers.knownOrg,
+    contextOrg: helpers.contextOrgFor(ctx.page),
+  };
+  const hasClaim = (t) => Boolean(extractProposition(t, extractCtx));
+  const evidence = selectEvidence(ctx.input, scorer, { entityTest, hasClaim });
 
   const result = { evidenceCount: evidence.length, claims: [], referencesAdded: 0 };
   if (!evidence.length) return result;
 
   for (const ev of evidence) ev.evidenceId = await recordEvidence(db, ctx.sourceId, ctx.runId, ev);
 
-  const extractCtx = {
-    knownOrg: helpers.knownOrg,
-    contextOrg: helpers.contextOrgFor(ctx.page),
-  };
   const seen = new Set();
   for (const ev of evidence) {
     if (result.claims.length >= MAX_PROPOSITIONS_PER_SOURCE) break;

@@ -20,6 +20,12 @@ import { api } from '../services/api.js';
 import { formatDate, formatDateTime, formatPercent } from '../utils/format.js';
 import { LINEAGE_BASIS_LABEL, NO_UPSTREAM_NOTE, PREDICATE_TEXT, RELATIONSHIP_LABEL, echoLabel, isDemo } from '../utils/labels.js';
 
+const RELATION_PHRASE = {
+  DIFFERENT_VALUE: 'the same subject and relationship with a different value',
+  RELATED: 'the same subject but a different relationship',
+  TOPICAL: 'only a topical connection to the search',
+};
+
 function Metrics({ claim, demo }) {
   const ratio = claim.echo_ratio_plsql ?? claim.known_echo_ratio;
   return (
@@ -60,7 +66,7 @@ function InvestigatedQuery({ id, runId }) {
           <p className="mt-1">
             {d.relationship_to_query === 'EXACT'
               ? 'This claim family matches the searched relationship.'
-              : <>This is a <b className="text-ink">{relation[0].toLowerCase()}</b>, not the searched relationship “{d.hypothesis_text}”.</>}
+              : <>This claim family has <b className="text-ink">{RELATION_PHRASE[d.relationship_to_query]}</b>; it is not the searched relationship “{d.hypothesis_text.replace(/\.$/, '')}”.</>}
             {d.relationship_to_query !== 'EXACT' && !d.exact_evidence && ' No retrieved source in this investigation directly supported the exact searched relationship.'}
           </p>
         )}

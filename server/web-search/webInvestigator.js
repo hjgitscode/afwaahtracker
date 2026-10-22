@@ -169,6 +169,18 @@ async function linkResult(db, runId, sourceId, result, duplicate) {
   );
 }
 
+/**
+ * A publication date written into the address itself ("/2025/10/25/",
+ * "/2025-10-25/"), used only when neither the page nor the search result
+ * states one. Day and month must be valid; nothing else is guessed.
+ */
+function dateFromUrl(url) {
+  const m = /\/(20\d{2})[/-](0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])(?:\/|-|\.|$)/.exec(String(url || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCDate() === Number(m[3]) && d <= new Date() ? d : null;
+}
+
 /** Builds the stored item from the search result and (when available) the page. */
 function buildItem(result, page) {
   const title = page?.title || result.title;
@@ -177,7 +189,7 @@ function buildItem(result, page) {
     url: result.url,
     publisher: page?.publisher || result.publisher || result.domain,
     author: page?.author || null,
-    publishedAt: page?.publishedAt || result.publishedAt || null,
+    publishedAt: page?.publishedAt || result.publishedAt || dateFromUrl(result.url),
     snippet: page?.text || page?.description || result.snippet,
     unknownDate: 'null',
   });

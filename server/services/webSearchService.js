@@ -175,7 +175,12 @@ export async function getRunResults(runId) {
     ),
   ]);
 
-  const runClaimIds = new Set(claims.map((c) => c.claim_id));
+  // Only families built from an extracted proposition are "found" by this run.
+  // Older title-made families (no proposition) that share sources are listed
+  // with the stored matches instead.
+  const families = claims.filter((c) => c.claim_type);
+  const legacy = claims.filter((c) => !c.claim_type);
+  const runClaimIds = new Set(families.map((c) => c.claim_id));
   const by = Object.fromEntries(support.map((r) => [r.relationship_to_query, r]));
   return {
     run,
@@ -192,10 +197,10 @@ export async function getRunResults(runId) {
       exactSources: by.EXACT?.sources || 0,
     },
     support: by,
-    claims,
+    claims: families,
     relatedSources: related.sources,
     relatedSourceCount: related.total,
-    storedClaims: stored.claims.filter((c) => !runClaimIds.has(c.claim_id)),
+    storedClaims: [...legacy, ...stored.claims.filter((c) => !runClaimIds.has(c.claim_id) && !legacy.some((l) => l.claim_id === c.claim_id))],
   };
 }
 
