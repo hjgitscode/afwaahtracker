@@ -4,7 +4,8 @@
  * missing and re-links automatic claim lineage with the evidence-based rules)
  * and 11_tavily_provider.sql (Tavily as the web search provider), 12 (claim
  * intelligence) and 13 (novelty pipeline: run stages, provenance / lineage /
- * ledger finalisation, legacy-family merge).
+ * ledger finalisation, legacy-family merge) and 14 (action predicates, stated
+ * attributions, claim variation).
  *
  * Usage:  npm run db:migrate            (from the server folder or the root)
  */
@@ -12,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect, runFiles } from './installDb.js';
 
-export const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql', '12_claim_intelligence.sql', '13_novelty_pipeline.sql'];
+export const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql', '12_claim_intelligence.sql', '13_novelty_pipeline.sql', '14_review_readiness.sql'];
 
 async function main() {
   const conn = await connect();

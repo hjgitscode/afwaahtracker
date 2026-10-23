@@ -62,4 +62,8 @@ export const PREDICATE_TEXT = {
   ANNOUNCED: 'announced', LAUNCHED: 'launched', CANCELLED: 'cancelled', POSTPONED: 'postponed', VISITED: 'visited',
   PERFORMED_AT: 'performed at', RELEASED: 'released', ACQUIRED: 'acquired', BANNED: 'banned', OPENED: 'opened',
   CLOSED: 'closed', APPROVED: 'approved', REJECTED: 'rejected', SIGNED: 'signed', RESIGNED_FROM: 'resigned from',
+  IMPOSED: 'imposed', RAISED: 'raised', CUT: 'cut', EXTENDED: 'extended', SUSPENDED: 'suspended', WITHDREW: 'withdrew',
+  REMOVED: 'removed', LIFTED: 'lifted', PASSED: 'passed', INTRODUCED: 'introduced', ARRESTED: 'arrested', DETAINED: 'detained',
+  CHARGED: 'charged', CONVICTED: 'convicted', ACQUITTED: 'acquitted', SUED: 'sued', FINED: 'fined', WON: 'won', LOST: 'lost',
+  ELECTED: 'elected', APPOINTED: 'appointed', DISMISSED: 'dismissed', MET: 'met', WARNED: 'warned', CONFIRMED: 'confirmed', DENIED: 'denied',
 };

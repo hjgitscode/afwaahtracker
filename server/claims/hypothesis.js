@@ -5,11 +5,13 @@
  *
  *   "Is GV Selvam director of VIT?"   -> CLAIM_QUERY  G. V. Selvam | HOLDS_ROLE | Director | VIT
  *   "Did Apple launch iPhone 17?"     -> CLAIM_QUERY  Apple | LAUNCHED | iPhone 17
+ *   "US imposed tariffs on India"     -> CLAIM_QUERY  United States | IMPOSED | tariffs | India
  *   "VIT located in Vellore"          -> CLAIM_QUERY  VIT | LOCATED_IN | Vellore
  *   "Who is Sundar Pichai?"           -> ENTITY_QUERY Sundar Pichai
  *   "AI education India"              -> TOPIC_SEARCH (no proposition is invented)
  */
-import { ROLE_SURFACES, canonicalRole, VERB_SURFACES, VERB_LOOKUP, CLAIM_TYPE_OF } from './lexicon.js';
+import { ROLE_SURFACES, canonicalRole, VERB_SURFACES, VERB_LOOKUP, CLAIM_TYPE_OF, canonicalActor, actionTarget, rejectsVerb, isNonObject } from './lexicon.js';
+import { cleanEventObject } from './propositions.js';
 import { displayPersonName, displayOrgName } from './names.js';
 import { canonicalText } from './canonical.js';
 
@@ -89,9 +91,19 @@ export function parseQuery(query, opts = {}) {
       return { ...h, text: canonicalText(h) };
     }
     if (kind === 'EVENT') {
+      // Same action registry, targets and safeguards as the evidence extractor
       const verb = VERB_LOOKUP.get(g.verb.toLowerCase().replace(/\s+/g, ' '));
-      if (!verb || g.subj.split(' ').length > 5) continue;
-      const h = { queryType: 'CLAIM_QUERY', queryText: raw, claimType: 'EVENT_ACTION', subject: known(g.subj, false), subjectType: 'ORGANISATION', predicate: verb.code, verbPast: verb.past, object: g.obj.replace(/^(?:a|an|the)\s+/i, ''), qualifier: null };
+      if (!verb || g.subj.split(' ').length > 5 || rejectsVerb(verb, g.obj, ` ${g.obj}`)) continue;
+      const object = cleanEventObject(g.obj) || g.obj.replace(/^(?:a|an|the)\s+/i, '');
+      if (isNonObject(g.obj, object)) continue;
+      const target = actionTarget(verb, ` ${g.obj}`);
+      const actor = canonicalActor(g.subj);
+      const h = {
+        queryType: 'CLAIM_QUERY', queryText: raw, claimType: 'EVENT_ACTION',
+        subject: actor !== g.subj.replace(/^the\s+/i, '').trim() ? actor : known(g.subj, false), subjectType: 'ORGANISATION',
+        predicate: verb.code, verbPast: verb.past, verbBase: verb.base, object,
+        qualifier: target, qualifierType: target ? 'LOCATION' : null,
+      };
       return { ...h, text: canonicalText(h) };
     }
     if (kind === 'ENTITY') {

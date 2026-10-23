@@ -28,9 +28,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initPool, closePool, withConnection, withTransaction, oracledb } from '../db/pool.js';
 import { loadDictionary } from '../ingestion/entityMatcher.js';
-import { analyseStoredSource, supersedeLegacy } from '../ingestion/sourceProcessor.js';
+import { analyseStoredSource, supersedeLegacy, recordStatedAttribution } from '../ingestion/sourceProcessor.js';
 import { parseQuery } from '../claims/hypothesis.js';
-import { makeScorer, detectAttributions } from '../claims/evidence.js';
+import { makeScorer, detectAttributionPhrases } from '../claims/evidence.js';
 import { makeEntityHelpers } from '../claims/entities.js';
 import { roleCode } from '../claims/lexicon.js';
 import { eventObjectKey } from '../claims/canonical.js';
@@ -215,19 +215,14 @@ export async function repairLive({ log = console.log, fetch = true } = {}) {
   let refs = 0;
   let phrases = 0;
   for (const s of claimSources) {
-    const names = detectAttributions(`${s.source_title || ''}\n${s.snippet || ''}`);
-    if (!names.length) continue;
-    phrases += names.length;
+    const credits = detectAttributionPhrases(`${s.source_title || ''}\n${s.snippet || ''}`);
+    if (!credits.length) continue;
+    phrases += credits.length;
     await withTransaction(async (db) => {
-      for (const name of names) {
-        const r = await db.exec(`BEGIN :n := record_attribution_reference(:s, :p); END;`, {
-          n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, s: s.source_id, p: name,
-        });
-        refs += r.outBinds.n || 0;
-      }
+      for (const a of credits) refs += await recordStatedAttribution(db, s.source_id, a);
     }).catch((e) => log(`  references of source #${s.source_id}: rolled back (${e.message.split('\n')[0]})`));
   }
-  log(`Examined ${claimSources.length} live claim sources for attributions: ${phrases} phrases, ${refs} new ATTRIBUTION references.`);
+  log(`Examined ${claimSources.length} live claim sources for attributions: ${phrases} stated credits kept, ${refs} resolved to new ATTRIBUTION references.`);
 
   // 4. Provenance -> parents -> Mutation Ledger for every live family
   const liveClaims = await withConnection((db) => db.rows(

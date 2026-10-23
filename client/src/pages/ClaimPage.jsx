@@ -13,12 +13,14 @@ import FingerprintCard from '../components/claim/FingerprintCard.jsx';
 import EvidenceTable from '../components/claim/EvidenceTable.jsx';
 import DatabaseTrace from '../components/claim/DatabaseTrace.jsx';
 import MutationLedger from '../components/claim/MutationLedger.jsx';
+import ClaimVariation from '../components/claim/ClaimVariation.jsx';
+import AnalysisCoverage from '../components/claim/AnalysisCoverage.jsx';
 import Timeline from '../components/claim/Timeline.jsx';
 import LineageGraph from '../components/claim/LineageGraph.jsx';
 import { useApi } from '../hooks/useApi.js';
 import { api } from '../services/api.js';
 import { formatDate, formatDateTime, formatPercent } from '../utils/format.js';
-import { LINEAGE_BASIS_LABEL, NO_UPSTREAM_NOTE, PREDICATE_TEXT, RELATIONSHIP_LABEL, echoLabel, isDemo } from '../utils/labels.js';
+import { LINEAGE_BASIS_LABEL, PREDICATE_TEXT, RELATIONSHIP_LABEL, echoLabel, isDemo } from '../utils/labels.js';
 
 const RELATION_PHRASE = {
   DIFFERENT_VALUE: 'the same subject and relationship with a different value',
@@ -26,7 +28,7 @@ const RELATION_PHRASE = {
   TOPICAL: 'only a topical connection to the search',
 };
 
-function Metrics({ claim, demo }) {
+function Metrics({ claim, demo, diag }) {
   const ratio = claim.echo_ratio_plsql ?? claim.known_echo_ratio;
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -41,9 +43,14 @@ function Metrics({ claim, demo }) {
         <div className="mt-3 text-[2rem] font-extrabold leading-none tracking-tight text-ink">{formatPercent(ratio)}</div>
         <div className="mt-3"><EchoBar ratio={ratio} /></div>
         <div className="mt-2 text-[12.5px] text-ink-2">
-          {claim.known_upstream_count
-            ? `${claim.known_upstream_count} of ${claim.number_of_sources} sources have a known upstream source`
-            : demo ? claim.echo_band : NO_UPSTREAM_NOTE}
+          {demo && !claim.known_upstream_count ? claim.echo_band
+            : `${claim.known_upstream_count} / ${claim.number_of_sources} sources have a resolved upstream dependency.`}
+          {!demo && !claim.known_upstream_count && (
+            <span className="mt-1 block">Zero means no resolvable source dependency was observed in the retrieved sample; it does not prove the sources are independent.</span>
+          )}
+          {!demo && diag?.unresolvedAttributionCount > 0 && (
+            <span className="mt-1 block">{diag.unresolvedAttributionCount} stated credit{diag.unresolvedAttributionCount > 1 ? 's' : ''} could not be resolved and {diag.unresolvedAttributionCount > 1 ? 'are' : 'is'} not counted.</span>
+          )}
         </div>
       </div>
     </div>
@@ -82,7 +89,7 @@ function Proposition({ claim }) {
     ['Subject', claim.subject],
     ['Relationship', PREDICATE_TEXT[claim.predicate] || claim.predicate.toLowerCase()],
     [claim.predicate === 'HOLDS_ROLE' ? 'Role' : 'Object', claim.object],
-    ['Organisation', claim.qualifier],
+    [claim.claim_type === 'EVENT_ACTION' ? 'Target' : 'Organisation', claim.qualifier],
   ].filter(([, v]) => v);
   return (
     <dl className="mt-4 flex flex-wrap gap-2">
@@ -120,7 +127,45 @@ function SelectedPanel({ item, kind, demo }) {
   );
 }
 
-function Lineage({ id, kind, demo }) {
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Stated provenance (SOURCE_ATTRIBUTIONS): credits the pages make, resolved or not. */
+function StatedProvenance({ diag }) {
+  if (!diag) return null;
+  return (
+    <div className="mb-5 rounded-xl border border-line bg-tint/50 px-4 py-3 text-[14px] text-ink-2">
+      <div className="meta-label">Stated provenance · SOURCE_ATTRIBUTIONS</div>
+      <div className="mt-1">
+        <b className="text-ink">{diag.sourceCount}</b> sources analysed ·{' '}
+        <b className="text-ink">{diag.sourcesWithStatedCredit}</b> explicitly credit another publisher
+        {diag.statedCredits?.length > 0 && (
+          <> ({diag.statedCredits.map((c) => `${c.publisher} ×${c.sources}`).join(', ')})</>
+        )}
+        {' · '}<b className="text-ink">{diag.resolvedAttributionCount}</b> resolved to a retrieved source ·{' '}
+        <b className="text-ink">{diag.unresolvedAttributionCount}</b> unresolved
+      </div>
+      <div className="mt-1 text-[12.5px]">Only resolved credits and hyperlinks become lineage edges or count towards the Known Echo Ratio.</div>
+    </div>
+  );
+}
+
+function lineageEmptyText(claim, demo, diag) {
+  if (claim) {
+    if (!diag) return 'No variant of this claim has an explicit reference or a sufficiently similar earlier version.';
+    return `${plural(diag.variantCount, 'variant')} available · ${diag.datedVariantCount} with a usable publication date · `
+      + `${diag.referencedParentCount} explicit predecessor reference${diag.referencedParentCount === 1 ? '' : 's'} found. `
+      + 'A lineage cannot be established without inventing chronology.';
+  }
+  if (demo) return 'No provenance is recorded between these sources.';
+  if (!diag) return 'Reference detection ran: none of these sources links to or credits another stored source. That does not prove they are independent.';
+  return diag.statedAttributionCount
+    ? `${plural(diag.sourceCount, 'source')} analysed · ${plural(diag.statedAttributionCount, 'stated upstream credit')} detected · `
+      + `${diag.resolvedAttributionCount} resolved to a stored source. No source-lineage edge was created from an unresolved credit.`
+    : `${plural(diag.sourceCount, 'source')} analysed · 0 explicit hyperlinks or resolvable source credits detected. `
+      + 'No source-lineage edge was created; that does not prove the sources are independent.';
+}
+
+function Lineage({ id, kind, demo, diag }) {
   const state = useApi((signal) => (kind === 'claim' ? api.claimLineage(id, { signal }) : api.sourceLineage(id, { signal })), [id, kind]);
   const [selected, setSelected] = useState(null);
   const claim = kind === 'claim';
@@ -134,15 +179,14 @@ function Lineage({ id, kind, demo }) {
           : (demo ? 'Which sources are known to derive from which.' : 'Only explicit evidence creates a link: a hyperlink, submitted or canonical link, or a credit such as “according to PTI” naming a stored source.')}
         icon={claim ? GitBranch : Network}
       />
+      {!claim && !demo && <StatedProvenance diag={diag} />}
       {state.error ? <ErrorState compact error={state.error} onRetry={state.reload} />
         : !state.data ? <LoadingBlock rows={6} />
           : !state.data.edges.length ? (
             <EmptyState compact icon={claim ? GitBranch : Network} title={claim ? 'No parent wording known' : 'No known upstream links'}>
               {claim
-                ? 'No variant links to or credits another source of this family, and no version has an earlier dated version to follow. Undated sources are never given an inferred parent.'
-                : demo
-                  ? 'No provenance is recorded between these sources.'
-                  : 'Reference detection ran: none of these sources links to or credits another stored source. That does not prove they are independent.'}
+                ? lineageEmptyText(true, demo, diag)
+                : lineageEmptyText(false, demo, diag)}
             </EmptyState>
           ) : (
             <>
@@ -162,6 +206,9 @@ export default function ClaimPage() {
   const sourcesState = useApi((signal) => api.claimSources(id, { signal }), [id]);
   const evidenceState = useApi((signal) => api.claimEvidence(id, { signal }), [id]);
   const mutationsState = useApi((signal) => api.claimMutations(id, { signal }), [id]);
+  const variationState = useApi((signal) => api.claimVariation(id, { signal }), [id]);
+  const diagState = useApi((signal) => api.claimDiagnostics(id, { signal }), [id]);
+  const diag = diagState.data;
 
   const crumbs = [{ label: 'Explore', to: '/explore' }, { label: `Claim #${id}` }];
 
@@ -212,7 +259,7 @@ export default function ClaimPage() {
       </PageHeader>
 
       <div className="relative z-10 space-y-6">
-        <Metrics claim={claim} demo={demo} />
+        <Metrics claim={claim} demo={demo} diag={diag} />
 
         <Card>
           <CardHeader label="VW_CLAIM_EVIDENCE" title="Evidence from sources" subtitle="The exact sentence each source states, oldest first." icon={FileText} />
@@ -226,13 +273,16 @@ export default function ClaimPage() {
           : !sourcesState.data ? <div className="card card-pad"><LoadingBlock rows={6} /></div>
             : <Timeline sources={sourcesState.data} demo={demo} />}
 
+        <ClaimVariation state={variationState} />
+
         {mutationsState.error ? <ErrorState error={mutationsState.error} onRetry={mutationsState.reload} />
           : !mutationsState.data ? <div className="card card-pad"><LoadingBlock rows={8} /></div>
-            : <MutationLedger mutations={mutationsState.data} />}
+            : <MutationLedger mutations={mutationsState.data} diag={diag} />}
 
-        <Lineage id={id} kind="claim" demo={demo} />
-        <Lineage id={id} kind="source" demo={demo} />
+        <Lineage id={id} kind="claim" demo={demo} diag={diag} />
+        <Lineage id={id} kind="source" demo={demo} diag={diag} />
 
+        <AnalysisCoverage state={diagState} />
         <FingerprintCard claim={claim} />
         <DatabaseTrace claim={claim} />
       </div>

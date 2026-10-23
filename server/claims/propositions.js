@@ -17,13 +17,15 @@
  *   ORG:FOUNDED_BY     "X was founded by Y"
  *   ORG:MEMBER_OF      "X is a member of Y"
  *   ORG:OWNS           "X owns Y"  /  "Y is owned by X"
- *   EVENT:VERB         "X launched / postponed / visited ... Y"
+ *   EVENT:VERB         "X launched / imposed / arrested / visited ... Y (on Z)"
  *   EVENT:PASSIVE      "Y was launched by X"
+ * Event verbs, their targets ("tariffs ON INDIA") and safeguards come from the
+ * single action registry in lexicon.js (shared with the query parser).
  * A role sentence without a stated organisation takes the organisation from
  * the page context (publisher / title) only when it is a known entity or the
  * investigated organisation; basis then ends in "+PAGE_QUALIFIER".
  */
-import { ROLE_SURFACES, canonicalRole, VERB_SURFACES, VERB_LOOKUP, CLAIM_TYPE_OF } from './lexicon.js';
+import { ROLE_SURFACES, canonicalRole, VERB_SURFACES, VERB_LOOKUP, CLAIM_TYPE_OF, STATEMENT_PREDICATES, canonicalActor, actionTarget, rejectsVerb, isNonObject } from './lexicon.js';
 import { displayPersonName, displayOrgName } from './names.js';
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -76,8 +78,11 @@ const VERB_ALT = VERB_SURFACES.map((v) => v.split(' ').map(esc).join('\\s+')).jo
 const MODAL = '(?:(?:will|would|may|might|could|can|shall|to|plans\\s+to|plan\\s+to|set\\s+to|is\\s+set\\s+to|are\\s+set\\s+to|is\\s+expected\\s+to|are\\s+expected\\s+to|is\\s+likely\\s+to|has|have|had|is|are|was|were|reportedly|officially|finally|also|not|did\\s+not|does\\s+not|didn[’\']t|doesn[’\']t|has\\s+not|won[’\']t)\\s+){0,3}';
 // "Zorbania council", "Delhi police": a proper name plus an institutional noun
 const INSTITUTION = `[A-Z][A-Za-z'’-]+(?:\\s+[A-Z][A-Za-z'’-]+)?(?:\\s+(?:city|state|national|district|local|high|state-run))?\\s+(?:council|government|police|court|board|ministry|university|college|company|team|officials|administration|authorities|committee|union|cabinet|parliament|airport|hospital|school|club|municipality|corporation)`;
-const EVENT_RE = new RegExp(`(?<subj>${INSTITUTION}|${ORG_CORE}|${PERSON_CORE})\\s+${MODAL}(?<verb>${VERB_ALT})\\b\\s*(?<obj>[^,.;:!?]{2,90})?`);
-const PASSIVE_RE = new RegExp(`(?<obj>(?:[Tt]he\\s+)?[A-Z][^,.;:!?]{1,70}?)\\s+(?:was|were|has\\s+been|have\\s+been|is|are|will\\s+be)\\s+(?<verb>${VERB_ALT})\\s+by\\s+(?<subj>${ORG_CORE}|${PERSON_CORE})`);
+// "The court", "the police", "the commission": a generic institutional actor
+const GENERIC_ACTOR = `[Tt]he\\s+(?:(?:Supreme|High|district|federal|apex|state|central|city)\\s+)?(?:court|police|government|centre|center|company|firm|minister|ministry|commission|president|prime\\s+minister|board|council|cabinet|parliament|senate|army|military|committee|regulator|central\\s+bank|bank|tribunal|opposition|party|airline|administration|authorities|officials|agency|department|union|federation|club|team)`;
+// Global: every subject-verb reading is tried in order until one passes the safeguards
+const EVENT_RE = new RegExp(`(?<subj>${GENERIC_ACTOR}|${INSTITUTION}|${ORG_CORE}|${PERSON_CORE})\\s+${MODAL}(?<verb>${VERB_ALT})\\b(?![’'])\\s*(?<obj>[^,.;:!?]{2,90})?`, 'g');
+const PASSIVE_RE = new RegExp(`(?<obj>(?:[Tt]he\\s+)?[A-Z][^,.;:!?]{1,70}?)\\s+(?:was|were|has\\s+been|have\\s+been|is|are|will\\s+be)\\s+(?<verb>${VERB_ALT})\\s+by\\s+(?<subj>${GENERIC_ACTOR}|${ORG_CORE}|${PERSON_CORE})`, 'g');
 
 const STOP_OBJ = /\s+(?:again|soon|later|now|today|yet|too|once\s+more|as\s+well|in|at|on|for|to|after|before|amid|following|as|from|with|by|over|despite|until|during|this|next|last|which|that|who|while|because|said|says|according|and\s+(?:said|says|added))\b.*$/i;
 const MONTHS_ALT = 'January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday';
@@ -135,13 +140,56 @@ function eventTemporal(sentence) {
   return /\b(?:will|to\s+be|set\s+to|plans?\s+to|is\s+expected\s+to|are\s+expected\s+to|upcoming|scheduled)\b/i.test(sentence) ? 'FUTURE' : null;
 }
 
-function cleanEventObject(raw) {
+export function cleanEventObject(raw) {
   if (!raw) return null;
   let t = raw.replace(STOP_OBJ, '').trim();
   t = t.replace(/^(?:a|an|the|its|their|his|her)\s+/i, '').replace(/\s+/g, ' ');
   const words = t.split(' ').filter(Boolean).slice(0, 8);
   t = words.join(' ').replace(/[\s'"“”‘’-]+$/, '');
   return t.length >= 2 ? t : null;
+}
+
+/** One subject-verb-object reading of a sentence, or null when a safeguard rejects it. */
+function eventFrom(m, basis, s) {
+  const verb = VERB_LOOKUP.get(m.groups.verb.toLowerCase().replace(/\s+/g, ' '));
+  const generic = new RegExp(`^${GENERIC_ACTOR}$`).test(m.groups.subj.trim());
+  const subj = generic
+    ? m.groups.subj.replace(/^the\s+/i, '').replace(/\s+/g, ' ').replace(/(^|\s)([a-z])/g, (x, sp, c) => sp + c.toUpperCase())
+    : canonicalActor(cleanOrg(m.groups.subj.replace(/^the\s+(?=[A-Z])/i, '')));
+  if (!verb || !isPlausibleName(subj) || PRONOUN_SUBJ.test(subj) || BAD_SUBJ.test(subj)) return null;
+  // "announced for receiving the Doctorate": the verb has no direct object
+  // ... nor does "meet on Tuesday", "increased in March" or "increased sharply"
+  if (/^\s*(?:for|as|with|of|about|into|from|by)\b/i.test(m.groups.obj || '')) return null;
+  const object = cleanEventObject(m.groups.obj);
+  if (!object || isNonObject(m.groups.obj, object)) return null;
+  if (/^(?:to|that|it|this|them|him|her|us|up|out|down|back)\b/i.test(object)) return null;
+  const after = basis === 'EVENT:PASSIVE' ? '' : s.slice(m.index + m[0].length - (m.groups.obj ? m.groups.obj.length : 0));
+  if (rejectsVerb(verb, m.groups.obj || '', after)) return null;
+  const place = PLACE_AFTER.exec(after)?.groups.place || null;
+  const target = actionTarget(verb, after);
+  // A statement verb is the claim itself: "denied the allegation" is a stated
+  // denial (certainty of the rest of the sentence), not a denied proposition
+  const certainty = STATEMENT_PREDICATES.has(verb.code)
+    ? certaintyOf(s.replace(m.groups.verb, ' '))
+    : certaintyOf(s);
+  return {
+    claimType: 'EVENT_ACTION',
+    predicate: verb.code,
+    verbBase: verb.base,
+    verbPast: verb.past,
+    subject: /^[A-Z]{2,}$/.test(subj) || subj.split(' ').length > 3 ? subj : displayOrgName(subj),
+    subjectSurface: m.groups.subj,
+    subjectType: 'ORGANISATION',
+    object,
+    qualifier: target,
+    qualifierSurface: target,
+    qualifierType: target ? 'LOCATION' : null,
+    location: target && place === target ? null : place,
+    date: DATE_RE.exec(s)?.[0]?.replace(/^(?:on|in)\s+/i, '') || null,
+    temporal: eventTemporal(s),
+    certainty,
+    basis,
+  };
 }
 
 /**
@@ -267,38 +315,15 @@ export function extractProposition(sentence, ctx = {}) {
     };
   }
 
-  // 5. Events (actor + action + object)
+  // 5. Events (actor + action + object [+ target])
   for (const [re, basis] of [[PASSIVE_RE, 'EVENT:PASSIVE'], [EVENT_RE, 'EVENT:VERB']]) {
-    const m = re.exec(s);
-    if (!m) continue;
-    const verb = VERB_LOOKUP.get(m.groups.verb.toLowerCase().replace(/\s+/g, ' '));
-    const subj = cleanOrg(m.groups.subj);
-    if (!verb || !isPlausibleName(subj) || PRONOUN_SUBJ.test(subj) || BAD_SUBJ.test(subj)) continue;
-    // "announced for receiving the Doctorate": the verb has no direct object
-    if (/^\s*(?:for|as|with|of|about|into|from|by)\b/i.test(m.groups.obj || '')) continue;
-    let object = cleanEventObject(m.groups.obj);
-    // "perform at VIT" / "visited Mumbai": the place is the object
-    if (!object && (verb.code === 'VISITED' || verb.code === 'PERFORMED_AT')) continue;
-    if (!object) continue;
-    if (/^(?:to|that|it|this|them|him|her|us|up|out|down|back)\b/i.test(object)) continue;
-    const after = s.slice(m.index + m[0].length - (m.groups.obj ? m.groups.obj.length : 0));
-    const place = PLACE_AFTER.exec(after)?.groups.place || null;
-    return {
-      claimType: 'EVENT_ACTION',
-      predicate: verb.code,
-      verbBase: verb.base,
-      verbPast: verb.past,
-      subject: /^[A-Z]{2,}$/.test(subj) || subj.split(' ').length > 3 ? subj : displayOrgName(subj),
-      subjectSurface: m.groups.subj,
-      subjectType: 'ORGANISATION',
-      object,
-      qualifier: null,
-      location: place,
-      date: DATE_RE.exec(s)?.[0]?.replace(/^(?:on|in)\s+/i, '') || null,
-      temporal: eventTemporal(s),
-      certainty,
-      basis,
-    };
+    re.lastIndex = 0;
+    for (let m = re.exec(s); m; m = re.exec(s)) {
+      const p = eventFrom(m, basis, s);
+      if (p) return p;
+      // try the next reading inside this one ("Officials confirmed that NASA delayed ...")
+      re.lastIndex = m.index + 1;
+    }
   }
   return null;
 }

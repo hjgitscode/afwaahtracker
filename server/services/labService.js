@@ -9,11 +9,53 @@ import { NotFoundError } from '../middleware/errors.js';
 const TABLES = ['PLATFORMS', 'CATEGORIES', 'INGESTION_SOURCES', 'INGESTION_LOG', 'SOURCES', 'CLAIMS',
   'CLAIM_VARIANTS', 'ENTITIES', 'ENTITY_ALIASES', 'CLAIM_ENTITIES', 'ENTITY_CANDIDATES', 'KEYWORDS',
   'CLAIM_KEYWORDS', 'FINGERPRINTS', 'CLAIM_MUTATIONS', 'AUDIT_LOG', 'WEB_SEARCH_RUNS',
-  'SEARCH_RESULT_LINKS', 'SOURCE_REFERENCES', 'SOURCE_EVIDENCE', 'CLAIM_PROPOSITIONS', 'SEARCH_CLAIM_MATCHES'];
+  'SEARCH_RESULT_LINKS', 'SOURCE_REFERENCES', 'SOURCE_EVIDENCE', 'CLAIM_PROPOSITIONS', 'SEARCH_CLAIM_MATCHES',
+  'SOURCE_ATTRIBUTIONS', 'SEARCH_RUN_STAGES'];
 
 // Live data first (DEMO rows sort last), so each example shows what the
 // latest investigations actually produced.
 export const EXAMPLE_QUERIES = [
+  {
+    key: 'predicate-families',
+    title: 'Claim families by structured predicate',
+    concept: 'CLAIM_PROPOSITIONS JOIN CLAIM_VARIANTS + GROUP BY predicate',
+    sql: `SELECT p.predicate_code, p.subject_text, p.object_text, p.qualifier_text,
+       COUNT(DISTINCT v.source_id) AS sources, c.canonical_claim
+  FROM claim_propositions p
+  JOIN claims c         ON c.claim_id = p.claim_id
+  JOIN claim_variants v ON v.claim_id = p.claim_id
+ WHERE c.status <> 'MERGED'
+ GROUP BY p.predicate_code, p.subject_text, p.object_text, p.qualifier_text, c.canonical_claim, c.claim_id
+ ORDER BY c.claim_id DESC
+ FETCH FIRST 12 ROWS ONLY`,
+  },
+  {
+    key: 'claim-variation',
+    title: 'How versions of a claim differ (no order assumed)',
+    concept: 'View VW_CLAIM_VARIATION: COUNT(DISTINCT …) OVER (PARTITION BY claim_id)',
+    sql: `SELECT claim_id, publisher, certainty, quantity_value, location_name, claimed_date,
+       certainty_varies, quantity_varies, location_varies, date_varies
+  FROM vw_claim_variation
+ WHERE variant_count > 1
+   AND 'Y' IN (certainty_varies, quantity_varies, location_varies, date_varies, attribution_varies)
+ ORDER BY claim_id DESC, publisher
+ FETCH FIRST 12 ROWS ONLY`,
+  },
+  {
+    key: 'stated-attributions',
+    title: 'Stated credits: resolved vs unresolved',
+    concept: 'SOURCE_ATTRIBUTIONS LEFT JOIN SOURCES (self-reference via resolved_source_id) + GROUP BY',
+    sql: `SELECT a.publisher_text AS credited, a.resolution_status,
+       COUNT(*) AS credits,
+       LISTAGG(DISTINCT s.publisher, ', ') WITHIN GROUP (ORDER BY s.publisher) AS citing_publishers,
+       MAX(t.publisher) AS resolved_to
+  FROM source_attributions a
+  JOIN sources s      ON s.source_id = a.source_id
+  LEFT JOIN sources t ON t.source_id = a.resolved_source_id
+ GROUP BY a.publisher_text, a.resolution_status
+ ORDER BY credits DESC
+ FETCH FIRST 12 ROWS ONLY`,
+  },
   {
     key: 'claim-evidence-join',
     title: 'Claims, their sources and the exact evidence',

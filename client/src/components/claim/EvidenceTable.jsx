@@ -51,6 +51,7 @@ export default function EvidenceTable({ rows, demo }) {
                 <td>
                   <DependencyBadge derived={Boolean(r.derived_from_source_id)} demo={demo} />
                   {r.derived_from_publisher && <div className="mt-1 text-[13px] text-ink-2">from {r.derived_from_publisher}</div>}
+                  {r.stated_credits && <div className="mt-1 text-[12.5px] text-ink-2">Credits {r.stated_credits}</div>}
                 </td>
                 <td><ExternalLink href={r.source_url}>View source</ExternalLink></td>
               </tr>

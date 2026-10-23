@@ -259,7 +259,11 @@ export async function getClaimEvidence(id) {
   return query(
     `SELECT e.*,
             CASE WHEN e.published_at IS NOT NULL
-                  AND e.published_at = MIN(e.published_at) OVER () THEN 'Y' ELSE 'N' END AS is_earliest
+                  AND e.published_at = MIN(e.published_at) OVER () THEN 'Y' ELSE 'N' END AS is_earliest,
+            -- stated provenance of this source: credits it makes, resolved or not
+            (SELECT LISTAGG(a.publisher_text || CASE a.resolution_status WHEN 'RESOLVED' THEN '' ELSE ' (not retrieved)' END, ', ')
+                      WITHIN GROUP (ORDER BY a.publisher_text)
+               FROM source_attributions a WHERE a.source_id = e.source_id) AS stated_credits
        FROM vw_claim_evidence e
       WHERE e.claim_id = :id
       ORDER BY e.published_at NULLS LAST, e.variant_id`,
@@ -446,8 +450,58 @@ export async function getNoveltyDiagnostics(id) {
           ORDER BY search_run_id DESC, stage_order`
       )
       : [];
-    return { claimId: id, ...diagnosticsShape(d), stages };
+    // Stated provenance by publisher (GROUP BY in Oracle)
+    const statedCredits = await db.rows(
+      `SELECT a.publisher_text AS publisher,
+              COUNT(DISTINCT a.source_id) AS sources,
+              SUM(CASE WHEN a.resolution_status = 'RESOLVED' THEN 1 ELSE 0 END) AS resolved,
+              SUM(CASE WHEN a.resolution_status = 'UNRESOLVED' THEN 1 ELSE 0 END) AS unresolved
+         FROM source_attributions a
+        WHERE a.source_id IN (SELECT source_id FROM claim_variants WHERE claim_id = :id)
+        GROUP BY a.publisher_text
+        ORDER BY COUNT(DISTINCT a.source_id) DESC, a.publisher_text`,
+      { id }
+    );
+    return { claimId: id, ...diagnosticsShape(d), statedCredits, stages };
   });
+}
+
+const VARIATION_DIMENSIONS = [
+  ['certainty_varies', 'certainty', 'Certainty'],
+  ['date_varies', 'claimed_date', 'Date stated'],
+  ['quantity_varies', 'quantity_value', 'Quantity'],
+  ['location_varies', 'location_name', 'Location'],
+  ['event_varies', 'event_name', 'Event'],
+  ['attribution_varies', 'attribution', 'Attribution'],
+  ['object_varies', 'relation_object', 'Object'],
+  ['qualifier_varies', 'relation_qualifier', 'Qualifier'],
+];
+
+/**
+ * Claim Variation: how the retrieved versions differ, without order or
+ * parentage. Oracle (VW_CLAIM_VARIATION) decides which dimensions vary; the
+ * API only lists them with each version's value.
+ */
+export async function getClaimVariation(id) {
+  await assertClaim(id);
+  const rows = await query(
+    `SELECT * FROM vw_claim_variation WHERE claim_id = :id ORDER BY publisher, variant_id`,
+    { id }
+  );
+  const first = rows[0] || {};
+  const dimensions = VARIATION_DIMENSIONS
+    .filter(([flag]) => first[flag] === 'Y')
+    .map(([, column, label]) => ({ column, label }));
+  return {
+    claimId: id,
+    variantCount: Number(first.variant_count || 0),
+    dimensions,
+    variants: rows.map((r) => ({
+      variant_id: r.variant_id, source_id: r.source_id, publisher: r.publisher, published_at: r.published_at,
+      variant_text: r.variant_text,
+      values: Object.fromEntries(dimensions.map((d) => [d.column, r[d.column] ?? null])),
+    })),
+  };
 }
 
 /** Oracle row (VW_CLAIM_NOVELTY_DIAGNOSTICS) -> API shape. */
@@ -459,7 +513,16 @@ export function diagnosticsShape(d) {
     hasProposition: d.has_proposition === 'Y',
     normalizedSignature: d.normalized_signature || null,
     sourceCount: n(d.source_count),
+    readableSourceCount: n(d.readable_source_count),
     datedSourceCount: n(d.dated_source_count),
+    datedVariantCount: n(d.dated_variant_count),
+    referencedParentCount: n(d.referenced_parent_count),
+    transitionsWithChange: n(d.transitions_with_change),
+    hasVariation: n(d.has_variation) > 0,
+    statedAttributionCount: n(d.stated_attribution_count),
+    sourcesWithStatedCredit: n(d.sources_with_stated_credit),
+    resolvedAttributionCount: n(d.resolved_attribution_count),
+    unresolvedAttributionCount: n(d.unresolved_attribution_count),
     evidenceCount: n(d.evidence_count),
     storedSentenceCount: n(d.stored_sentence_count),
     variantCount: n(d.variant_count),

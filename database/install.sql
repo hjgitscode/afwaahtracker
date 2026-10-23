@@ -19,6 +19,7 @@
 --   11         Tavily as the web search provider (also usable as a migration)
 --   12         claim intelligence: evidence, propositions, search-claim matches
 --   13         novelty pipeline: run stages, provenance/lineage/ledger finalisation, legacy merge
+--   14         review readiness: action predicates, stated attributions, claim variation
 --------------------------------------------------------------------------------
 SET ECHO OFF
 SET VERIFY OFF
@@ -43,6 +44,7 @@ PROMPT ============================================================
 @@11_tavily_provider.sql
 @@12_claim_intelligence.sql
 @@13_novelty_pipeline.sql
+@@14_review_readiness.sql
 
 PROMPT Recompiling dependent objects ...
 BEGIN

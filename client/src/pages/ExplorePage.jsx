@@ -169,6 +169,9 @@ function RunView({ runId, query }) {
                       {data.relatedSourceCount
                         ? 'The retrieved pages did not state a structured claim. They are listed below as related sources.'
                         : 'The web search returned no usable results for this query.'}
+                      {!data.hypothesis && (
+                        <span className="mt-2 block">Try phrasing a specific statement, for example: “US imposed tariffs on India.”</span>
+                      )}
                     </EmptyState></div>
                   )}
                 </section>

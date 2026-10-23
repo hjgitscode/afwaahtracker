@@ -82,6 +82,22 @@ You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container cre
 
 `npm run repair` upgrades live data stored by earlier versions (no reset, demo data untouched, safe to repeat). It recovers missing publication dates (date in the URL, else the page's own metadata), re-reads stored sources into evidence sentences and propositions, and moves sources out of old title-made families (left as **MERGED**). It then records attribution references and rebuilds lineage and the Mutation Ledger. `npm run repair -- --no-fetch` skips the page fetch.
 
+`npm test` runs the deterministic extraction tests (no database needed). `npm run review-picks` lists, from your own Oracle data, the claim families that best show each analysis layer.
+
+### What each analysis layer means
+
+| Layer | Available when | Meaning |
+|---|---|---|
+| Evidence, canonical claim, structured variants | a claim is extracted | what the pages state |
+| **Claim Variation** (`VW_CLAIM_VARIATION`) | 2+ versions | how the retrieved versions differ, without assuming order or copying |
+| **Claim Lineage** | dated versions or a link/credit | defensible predecessor of each version |
+| **Mutation Ledger** | parent–child links exist | structured changes along those links |
+| **Stated provenance** (`SOURCE_ATTRIBUTIONS`) | a page credits someone ("according to Reuters") | every explicit credit, resolved or not |
+| **Source Lineage** | a resolved credit or hyperlink | edges only for credits/links to a retrieved source |
+| **Known Echo Ratio** | always | sources with a RESOLVED upstream ÷ all sources; unresolved credits never count |
+
+Actions (impose, raise, cut, arrest, win, meet, deny … 41 predicates) come from one registry, `server/claims/lexicon.js`, shared by the query parser and the extractor.
+
 `npm run investigate -- "Is GV Selvam director of VIT?"` runs one live investigation from the terminal and prints its Oracle diagnostics: every pipeline stage (examined / written), then sources, evidence, structured variants, parents, mutations, references and the Known Echo Ratio of each family found. `--run 42` or `--claim 305` prints the diagnostics of an earlier run or family.
 
 ### Pages

@@ -15,6 +15,8 @@
     "db:install": "node scripts/installDb.js",
     "db:migrate": "node scripts/migrateDb.js",
     "db:check": "node scripts/checkDb.js",
+    "test": "node --test tests/extraction.test.js",
+    "review-picks": "node scripts/reviewPicks.js",
     "repair": "node scripts/repairLive.js",
     "investigate": "node scripts/investigate.js",
     "db:prepare": "node scripts/prepareDb.js",

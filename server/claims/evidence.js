@@ -174,15 +174,26 @@ const ATTRIBUTION_RES = [
   /\b(?<name>Reuters|ANI|PTI|IANS|AFP)\s+reported\b/,
 ];
 
-/** Publisher names a text explicitly attributes its information to. */
-export function detectAttributions(text) {
-  const found = new Set();
+/**
+ * Explicit credits in a text: [{ name: 'Reuters', phrase: 'according to Reuters' }].
+ * Stored as STATED provenance (SOURCE_ATTRIBUTIONS) whether or not the
+ * credited article was retrieved.
+ */
+export function detectAttributionPhrases(text) {
+  const found = new Map();
   for (const re of ATTRIBUTION_RES) {
     const g = new RegExp(re.source, 'g');
     for (let m = g.exec(String(text || '')); m; m = g.exec(String(text || ''))) {
       const name = m.groups.name.replace(/[.,]+$/, '').trim();
-      if (name.length >= 2 && !/^(?:The|A|An|He|She|They|It|This|Sources?)$/.test(name)) found.add(name);
+      if (name.length >= 2 && !/^(?:The|A|An|He|She|They|It|This|Sources?)$/.test(name) && !found.has(name)) {
+        found.set(name, { name, phrase: m[0].replace(/[.,]+$/, '').trim().slice(0, 400) });
+      }
     }
   }
-  return [...found].slice(0, 5);
+  return [...found.values()].slice(0, 5);
+}
+
+/** Publisher names a text explicitly attributes its information to. */
+export function detectAttributions(text) {
+  return detectAttributionPhrases(text).map((a) => a.name);
 }

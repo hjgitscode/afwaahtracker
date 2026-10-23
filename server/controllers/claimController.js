@@ -18,6 +18,7 @@ export const variants = async (req, res) => res.json(await claims.getClaimVarian
 export const mutations = async (req, res) => res.json(await claims.getClaimMutations(parseId(req.params.id)));
 export const claimLineage = async (req, res) => res.json(await claims.getClaimLineage(parseId(req.params.id)));
 export const sourceLineage = async (req, res) => res.json(await claims.getSourceLineage(parseId(req.params.id)));
+export const variation = async (req, res) => res.json(await claims.getClaimVariation(parseId(req.params.id)));
 export const noveltyDiagnostics = async (req, res) => res.json(await claims.getNoveltyDiagnostics(parseId(req.params.id)));
 export const create = async (req, res) => res.status(201).json(await claims.createClaim(req.body));
 export const update = async (req, res) => res.json(await claims.updateClaim(parseId(req.params.id), req.body));

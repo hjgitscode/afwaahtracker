@@ -58,8 +58,9 @@ export function canonicalText(p) {
       if (p.verbBase && p.certainty === 'POSSIBLE') base = `may ${p.verbBase}`;
       else if (p.verbBase && (p.temporal === 'FUTURE' || p.certainty === 'EXPECTED')) base = `will ${p.verbBase}`;
       else if (p.verbBase && p.certainty === 'DENIED') base = `did not ${p.verbBase}`;
+      const target = p.qualifier ? ` on ${p.qualifier}` : '';
       const where = p.location ? ` in ${p.location}` : '';
-      return `${subj} ${base} ${p.object}${where}.`.replace(/\s+/g, ' ');
+      return `${subj} ${base} ${p.object}${target}${where}.`.replace(/\s+/g, ' ');
     }
   }
 }

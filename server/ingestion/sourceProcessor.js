@@ -30,7 +30,7 @@ import {
   detectCertainty, detectAction, detectQuantity, frequentTerms, findBestClaim, classify, describeBreakdown,
 } from './matcher.js';
 import { extractProposition, quantityOf } from '../claims/propositions.js';
-import { selectEvidence, makeScorer, detectAttributions } from '../claims/evidence.js';
+import { selectEvidence, makeScorer, detectAttributions, detectAttributionPhrases } from '../claims/evidence.js';
 import { makeEntityHelpers } from '../claims/entities.js';
 import { canonicalText, objectKey, signatureOf, objectSimilarity } from '../claims/canonical.js';
 import { roleCode } from '../claims/lexicon.js';
@@ -227,7 +227,7 @@ async function attachProposition(db, prop, ev, ctx) {
   const subject = await resolveEntity(db, prop.subject, subjectType);
   if (!subject) return null;
   const qualifier = prop.qualifier
-    ? await resolveEntity(db, prop.qualifier, 'ORGANISATION', prop.qualifierAcronym || null)
+    ? await resolveEntity(db, prop.qualifier, prop.qualifierType || 'ORGANISATION', prop.qualifierAcronym || null)
     : null;
   // Remember the spellings actually used on the page as aliases of the same
   // entity ("Dr G V Selvam", "G.V. Selvam" -> G. V. Selvam)
@@ -363,14 +363,12 @@ async function attachProposition(db, prop, ev, ctx) {
     k: keys.objectKey, v: added.outBinds.variant_id,
   });
 
-  // Provenance: attributions to a stored publisher in the same family, then
-  // the known upstream source (explicit evidence only)
+  // Provenance: every stated credit is kept (SOURCE_ATTRIBUTIONS); it becomes
+  // an ATTRIBUTION reference only when it resolves to a stored source of that
+  // publisher in the same family. Then the known upstream source.
   let referencesAdded = 0;
-  for (const name of attributions) {
-    const r = await db.exec(`BEGIN :n := record_attribution_reference(:s, :p); END;`, {
-      n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, s: sourceId, p: name,
-    });
-    referencesAdded += r.outBinds.n || 0;
+  for (const a of detectAttributionPhrases(ev.text)) {
+    referencesAdded += await recordStatedAttribution(db, sourceId, a, ctx.runId);
   }
   const upstream = await applySourceDependence(db, sourceId);
   const superseded = await supersedeLegacy(db, sourceId);
@@ -399,6 +397,17 @@ async function attachProposition(db, prop, ev, ctx) {
     referencesAdded,
     superseded,
   };
+}
+
+/**
+ * Stated provenance: keep the credit ("according to Reuters") and resolve it
+ * with the strict rule (RECORD_STATED_ATTRIBUTION). Returns new references.
+ */
+export async function recordStatedAttribution(db, sourceId, { name, phrase }, runId = null) {
+  const r = await db.exec(`BEGIN :n := record_stated_attribution(:s, :p, :ph, :run); END;`, {
+    n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, s: sourceId, p: name, ph: phrase || null, run: runId || null,
+  });
+  return r.outBinds.n || 0;
 }
 
 /**

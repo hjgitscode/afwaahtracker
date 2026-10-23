@@ -34,9 +34,9 @@ import { HttpError, ValidationError } from '../middleware/errors.js';
 import { mapLimit } from '../ingestion/http.js';
 import { normaliseUrl, makeItem, domainOf, cleanText, dateFromUrl } from '../ingestion/normalizer.js';
 import { loadDictionary } from '../ingestion/entityMatcher.js';
-import { processSourceItem, analyseStoredSource, recordReferences, refreshLineage } from '../ingestion/sourceProcessor.js';
+import { processSourceItem, analyseStoredSource, recordReferences, refreshLineage, recordStatedAttribution } from '../ingestion/sourceProcessor.js';
 import { parseQuery } from '../claims/hypothesis.js';
-import { makeScorer, detectAttributions } from '../claims/evidence.js';
+import { makeScorer, detectAttributionPhrases } from '../claims/evidence.js';
 import { makeEntityHelpers } from '../claims/entities.js';
 import { roleCode } from '../claims/lexicon.js';
 import { eventObjectKey } from '../claims/canonical.js';
@@ -153,7 +153,7 @@ async function recordClaimMatches(runId, h) {
       return r.outBinds.id ? `E${r.outBinds.id}` : null;
     };
     const subjectKey = await key(h.subject, h.subjectType || 'PERSON');
-    const qualifierKey = await key(h.qualifier, 'ORGANISATION', h.qualifier);
+    const qualifierKey = await key(h.qualifier, h.qualifierType || 'ORGANISATION', h.qualifier);
     let objectKey = null;
     if (h.predicate === 'HOLDS_ROLE') objectKey = roleCode(h.object);
     else if (h.objectType) objectKey = (await key(h.object, h.objectType)) || eventObjectKey(h.object);
@@ -419,14 +419,9 @@ export async function investigateWeb(rawQuery, { onStart } = {}) {
             });
           }
           const src = await db.one('SELECT source_title, snippet FROM sources WHERE source_id = :id', { id: s.sourceId });
-          const names = detectAttributions([src?.source_title, src?.snippet, s.searchSnippet].filter(Boolean).join('\n'));
-          attributionNames += names.length;
-          for (const name of names) {
-            const r = await db.exec(`BEGIN :n := record_attribution_reference(:s, :p); END;`, {
-              n: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }, s: s.sourceId, p: name,
-            });
-            added += r.outBinds.n || 0;
-          }
+          const credits = detectAttributionPhrases([src?.source_title, src?.snippet, s.searchSnippet].filter(Boolean).join('\n'));
+          attributionNames += credits.length;
+          for (const a of credits) added += await recordStatedAttribution(db, s.sourceId, a, runId);
           if (added) {
             refsAdded += added;
             counts.referencesFound += added;

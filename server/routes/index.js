@@ -28,6 +28,7 @@ router.get('/claims/:id/mutations', h(claims.mutations));
 router.get('/claims/:id/claim-lineage', h(claims.claimLineage));
 router.get('/claims/:id/source-lineage', h(claims.sourceLineage));
 router.get('/claims/:id/novelty-diagnostics', h(claims.noveltyDiagnostics));
+router.get('/claims/:id/variation', h(claims.variation));
 
 router.get('/sources', h(sources.list));
 router.post('/sources', requireAdmin, h(sources.create));
