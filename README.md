@@ -24,6 +24,8 @@ React displays. Express orchestrates. Oracle stores and analyses. The browser ne
 
 ## Running it locally on Windows (Docker Desktop)
 
+**Everyday use:** double-click `start-afwaahtracker.bat` in the project folder. It starts Docker Desktop, starts the Oracle container (and sets it to restart by itself whenever Docker starts), waits until Oracle accepts connections, then starts the site and opens http://localhost:5173. Close the window to stop the site. The steps below are the first-time setup and what the launcher does for you.
+
 For a public server, see **[Public deployment (Ubuntu VPS)](#public-deployment-ubuntu-vps)**.
 
 You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container created earlier (`afwaah-oracle`).
