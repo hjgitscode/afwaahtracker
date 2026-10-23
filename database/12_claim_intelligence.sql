@@ -124,11 +124,13 @@ BEGIN
     afw_ddl('ALTER TABLE claim_propositions ADD CONSTRAINT ck_propositions_type
                  CHECK (claim_type IN (''ROLE_RELATION'',''LOCATION_RELATION'',''ORGANISATION_RELATION'',''EVENT_ACTION'',
                                        ''STATUS_RELATION'',''QUANTITY_RELATION'',''IDENTITY_RELATION'',''GENERIC_RELATION''))');
-    afw_ddl('ALTER TABLE claim_propositions ADD CONSTRAINT ck_propositions_predicate
-                 CHECK (predicate_code IN (''HOLDS_ROLE'',''LOCATED_IN'',''MEMBER_OF'',''FOUNDED_BY'',''OWNS'',''ANNOUNCED'',
+    -- Added only when missing: migration 14 widens this list, and re-running
+    -- this script must never put the narrower list back
+    afw_swap_check('claim_propositions', 'ck_propositions_predicate', 'HOLDS_ROLE',
+                 'predicate_code IN (''HOLDS_ROLE'',''LOCATED_IN'',''MEMBER_OF'',''FOUNDED_BY'',''OWNS'',''ANNOUNCED'',
                                            ''LAUNCHED'',''CANCELLED'',''POSTPONED'',''VISITED'',''PERFORMED_AT'',''APPOINTED_AS'',
                                            ''RESIGNED_FROM'',''CONFIRMED'',''DENIED'',''RELEASED'',''ACQUIRED'',''BANNED'',
-                                           ''OPENED'',''CLOSED'',''APPROVED'',''REJECTED'',''SIGNED'',''OTHER''))');
+                                           ''OPENED'',''CLOSED'',''APPROVED'',''REJECTED'',''SIGNED'',''OTHER'')');
     afw_ddl('ALTER TABLE claim_propositions ADD CONSTRAINT ck_propositions_temporal
                  CHECK (temporal_scope IS NULL OR temporal_scope IN (''CURRENT'',''PAST'',''FUTURE''))');
     afw_ddl('ALTER TABLE claim_propositions ADD CONSTRAINT ck_propositions_origin

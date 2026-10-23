@@ -20,6 +20,7 @@
 --   12         claim intelligence: evidence, propositions, search-claim matches
 --   13         novelty pipeline: run stages, provenance/lineage/ledger finalisation, legacy merge
 --   14         review readiness: action predicates, stated attributions, claim variation
+--   15         self-repetition: publisher identity, repeated posts per claim
 --------------------------------------------------------------------------------
 SET ECHO OFF
 SET VERIFY OFF
@@ -45,6 +46,7 @@ PROMPT ============================================================
 @@12_claim_intelligence.sql
 @@13_novelty_pipeline.sql
 @@14_review_readiness.sql
+@@15_self_repetition.sql
 
 PROMPT Recompiling dependent objects ...
 BEGIN

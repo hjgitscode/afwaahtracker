@@ -95,6 +95,7 @@ You need **Node.js 18.18+** and **Docker Desktop** with the Oracle container cre
 | **Stated provenance** (`SOURCE_ATTRIBUTIONS`) | a page credits someone ("according to Reuters") | every explicit credit, resolved or not |
 | **Source Lineage** | a resolved credit or hyperlink | edges only for credits/links to a retrieved source |
 | **Known Echo Ratio** | always | sources with a RESOLVED upstream ÷ all sources; unresolved credits never count |
+| **Self-repetition** (`VW_CLAIM_REPETITION`) | always | (sources − distinct publishers) ÷ sources: the same site or account posting the claim again. Shown next to, never inside, the Known Echo Ratio. Publisher = website host, or the account in a social URL (`instagram.com/<account>`, `x.com/<user>`, `youtube.com/@channel`); posts whose account is unknown are never grouped |
 
 Actions (impose, raise, cut, arrest, win, meet, deny … 41 predicates) come from one registry, `server/claims/lexicon.js`, shared by the query parser and the extractor.
 

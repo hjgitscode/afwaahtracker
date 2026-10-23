@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect, runFiles } from './installDb.js';
 
-export const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql', '12_claim_intelligence.sql', '13_novelty_pipeline.sql', '14_review_readiness.sql'];
+export const MIGRATIONS = ['10_web_investigation.sql', '11_tavily_provider.sql', '12_claim_intelligence.sql', '13_novelty_pipeline.sql', '14_review_readiness.sql', '15_self_repetition.sql'];
 
 async function main() {
   const conn = await connect();

@@ -32,7 +32,13 @@ function Metrics({ claim, demo, diag }) {
   const ratio = claim.echo_ratio_plsql ?? claim.known_echo_ratio;
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <MetricCard label="Sources" value={claim.number_of_sources} hint={`${claim.variant_count} source version${claim.variant_count === 1 ? '' : 's'}`} icon={Layers} />
+      <MetricCard
+        label="Sources"
+        value={claim.number_of_sources}
+        hint={`${claim.variant_count} source version${claim.variant_count === 1 ? '' : 's'}`
+          + (claim.publisher_count ? ` · ${claim.publisher_count} publisher${claim.publisher_count === 1 ? '' : 's'}` : '')}
+        icon={Layers}
+      />
       <MetricCard label="Evidence" value={claim.evidence_count} hint="Exact sentences from the sources" icon={FileText} />
       <MetricCard label="Platforms" value={claim.number_of_platforms} hint={claim.platforms.map((p) => p.platform_name).slice(0, 3).join(', ')} icon={Radio} />
       <div className="card card-hover p-5 md:p-6">
@@ -47,6 +53,15 @@ function Metrics({ claim, demo, diag }) {
             : `${claim.known_upstream_count} / ${claim.number_of_sources} sources have a resolved upstream dependency.`}
           {!demo && !claim.known_upstream_count && (
             <span className="mt-1 block">Zero means no resolvable source dependency was observed in the retrieved sample; it does not prove the sources are independent.</span>
+          )}
+          {claim.publisher_count > 0 && (
+            <span className="mt-1 block">
+              Self-repetition {formatPercent(claim.self_repetition_ratio)}
+              {claim.repeated_sources > 0
+                ? ` · ${claim.repeated_sources} repeat post${claim.repeated_sources === 1 ? '' : 's'} by the same publisher (${claim.repeated_publishers})`
+                : ' · no publisher repeated the claim'}
+              . Shown separately; not counted in the Known Echo Ratio.
+            </span>
           )}
           {!demo && diag?.unresolvedAttributionCount > 0 && (
             <span className="mt-1 block">{diag.unresolvedAttributionCount} stated credit{diag.unresolvedAttributionCount > 1 ? 's' : ''} could not be resolved and {diag.unresolvedAttributionCount > 1 ? 'are' : 'is'} not counted.</span>

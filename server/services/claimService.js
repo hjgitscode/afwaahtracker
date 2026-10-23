@@ -187,6 +187,8 @@ export async function getClaim(id) {
               ci.normalized_signature, ci.evidence_count, ci.known_upstream_count, ci.known_echo_ratio,
               ci.mutation_count, ci.variant_count,
               calculate_echo_ratio(o.claim_id) AS echo_ratio_plsql,
+              -- self-repetition (VW_CLAIM_REPETITION): shown next to, never inside, the Echo Ratio
+              rp.publisher_count, rp.repeated_sources, rp.self_repetition_ratio, rp.repeated_publishers,
               (SELECT COUNT(*) FROM source_references r
                 WHERE r.from_source_id IN (SELECT source_id FROM claim_variants WHERE claim_id = o.claim_id)
                   AND r.to_source_id   IN (SELECT source_id FROM claim_variants WHERE claim_id = o.claim_id)) AS known_reference_links,
@@ -195,6 +197,7 @@ export async function getClaim(id) {
          FROM vw_claim_overview o
          JOIN claims c ON c.claim_id = o.claim_id
          JOIN vw_claim_investigation ci ON ci.claim_id = o.claim_id
+         LEFT JOIN vw_claim_repetition rp ON rp.claim_id = o.claim_id
         WHERE o.claim_id = :id`,
       { id }
     );
