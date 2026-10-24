@@ -174,7 +174,7 @@ Feeds (two GDELT queries, Hacker News top stories and seven RSS/Atom feeds, conf
 | `PORT` / `CORS_ORIGINS` | `3000` / `http://localhost:5173,…` (empty in production) | API port and allowed cross-origin browser origins |
 | `NODE_ENV` | `development` | `production` enables JSON logs, locks write endpoints and requires `DB_PASSWORD` |
 | `ADMIN_TOKEN` | *(empty)* | Bearer token for write/admin endpoints (development without a token: open; production without a token: disabled) |
-| `RATE_LIMIT_MAX` / `INVESTIGATE_RATE_MAX` / `INVESTIGATE_DAILY_LIMIT` | `300` / `10` / `100` | Requests per 15 min per IP / investigations per hour per IP / new web searches per day |
+| `RATE_LIMIT_MAX` / `INVESTIGATE_RATE_MAX` / `INVESTIGATE_DAILY_LIMIT` | `300` / `10` (`500` locally) / `100` (off locally) | Requests per 15 min per IP / investigations per hour per IP / new web searches per day |
 
 ---
 

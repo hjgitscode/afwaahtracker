@@ -36,10 +36,11 @@ const config = {
   rateLimit: {
     windowMinutes: Math.max(1, int(process.env.RATE_LIMIT_WINDOW_MINUTES, 15)),
     maxRequests: Math.max(10, int(process.env.RATE_LIMIT_MAX, 300)),
-    // Live web investigations use paid search credits
+    // Live web investigations use paid search credits. The strict limits apply
+    // to a public deployment; on a local machine (demo, review) they are relaxed.
     investigateWindowMinutes: Math.max(1, int(process.env.INVESTIGATE_RATE_WINDOW_MINUTES, 60)),
-    investigateMaxPerIp: Math.max(1, int(process.env.INVESTIGATE_RATE_MAX, 10)),
-    investigateDailyLimit: Math.max(0, int(process.env.INVESTIGATE_DAILY_LIMIT, 100)),
+    investigateMaxPerIp: Math.max(1, int(process.env.INVESTIGATE_RATE_MAX, isProduction ? 10 : 500)),
+    investigateDailyLimit: Math.max(0, int(process.env.INVESTIGATE_DAILY_LIMIT, isProduction ? 100 : 0)),
   },
   // Browser origins allowed to call the API cross-origin. Behind the bundled
   // Nginx the site is same-origin, so production can leave this empty.
